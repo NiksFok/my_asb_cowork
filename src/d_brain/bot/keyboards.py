@@ -72,6 +72,7 @@ def get_help_inline_keyboard() -> InlineKeyboardMarkup:
 def get_settings_keyboard(
     night_notifications: bool = True,
     health_enabled: bool = False,
+    obsidian_sync_enabled: bool = True,
 ) -> InlineKeyboardMarkup:
     """Inline keyboard for Settings menu."""
     builder = InlineKeyboardBuilder()
@@ -79,6 +80,8 @@ def get_settings_keyboard(
     builder.button(text=toggle_label, callback_data="settings:toggle_night")
     health_label = "🫀 Здоровье (Oura): ВКЛ" if health_enabled else "🫀 Здоровье (Oura): ВЫКЛ"
     builder.button(text=health_label, callback_data="settings:toggle_health")
+    sync_label = "📡 Obsidian Sync: ВКЛ" if obsidian_sync_enabled else "📡 Obsidian Sync: ВЫКЛ"
+    builder.button(text=sync_label, callback_data="settings:toggle_obsidian_sync")
     builder.button(text="🏙️ Сменить город", callback_data="settings:change_city")
     builder.adjust(1)
     return builder.as_markup()

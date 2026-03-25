@@ -24,6 +24,23 @@ router = Router(name="commands")
 _night_notifications_enabled: bool = True
 
 
+def _write_env_flag(key: str, value: str) -> None:
+    """Persist a boolean flag to .env file so it survives bot restarts."""
+    import re
+    from pathlib import Path
+    env_path = Path(__file__).parents[4] / ".env"
+    if not env_path.exists():
+        env_path.write_text(f"{key}={value}\n", encoding="utf-8")
+        return
+    text = env_path.read_text(encoding="utf-8")
+    pattern = re.compile(rf"^{re.escape(key)}=.*$", re.MULTILINE)
+    if pattern.search(text):
+        text = pattern.sub(f"{key}={value}", text)
+    else:
+        text = text.rstrip("\n") + f"\n{key}={value}\n"
+    env_path.write_text(text, encoding="utf-8")
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message) -> None:
     """Handle /start command."""
@@ -149,7 +166,7 @@ async def cmd_settings(message: Message) -> None:
         f"<b>Настройки</b>\n\n"
         f"🏙️ Город: <b>{settings.location_city}</b>\n",
         reply_markup=get_settings_keyboard(
-            _night_notifications_enabled, settings.health_enabled
+            _night_notifications_enabled, settings.health_enabled, settings.obsidian_sync_enabled
         ),
     )
 
@@ -189,7 +206,7 @@ async def cb_settings(callback: CallbackQuery) -> None:
         f"<b>Настройки</b>\n\n"
         f"🏙️ Город: <b>{settings.location_city}</b>\n",
         reply_markup=get_settings_keyboard(
-            _night_notifications_enabled, settings.health_enabled
+            _night_notifications_enabled, settings.health_enabled, settings.obsidian_sync_enabled
         ),
     )
 
@@ -208,7 +225,7 @@ async def cb_toggle_night(callback: CallbackQuery) -> None:
         f"<b>Настройки</b>\n\n"
         f"🏙️ Город: <b>{settings.location_city}</b>\n",
         reply_markup=get_settings_keyboard(
-            _night_notifications_enabled, settings.health_enabled
+            _night_notifications_enabled, settings.health_enabled, settings.obsidian_sync_enabled
         ),
     )
 
@@ -225,7 +242,25 @@ async def cb_toggle_health(callback: CallbackQuery) -> None:
         f"<b>Настройки</b>\n\n"
         f"🏙️ Город: <b>{settings.location_city}</b>\n",
         reply_markup=get_settings_keyboard(
-            _night_notifications_enabled, new_value
+            _night_notifications_enabled, new_value, settings.obsidian_sync_enabled
+        ),
+    )
+
+
+@router.callback_query(F.data == "settings:toggle_obsidian_sync")
+async def cb_toggle_obsidian_sync(callback: CallbackQuery) -> None:
+    """Toggle Obsidian git sync setting (persisted to .env)."""
+    settings = get_settings()
+    new_value = not settings.obsidian_sync_enabled
+    object.__setattr__(settings, "obsidian_sync_enabled", new_value)
+    _write_env_flag("OBSIDIAN_SYNC_ENABLED", str(new_value).lower())
+    status = "включена" if new_value else "выключена"
+    await callback.answer(f"Синхронизация {status}")
+    await callback.message.edit_text(  # type: ignore[union-attr]
+        f"<b>Настройки</b>\n\n"
+        f"🏙️ Город: <b>{settings.location_city}</b>\n",
+        reply_markup=get_settings_keyboard(
+            _night_notifications_enabled, settings.health_enabled, new_value
         ),
     )
 
@@ -254,6 +289,6 @@ async def handle_city_input(message: Message, state: FSMContext) -> None:
     await message.answer(
         f"✅ Город обновлён: <b>{city}</b>",
         reply_markup=get_settings_keyboard(
-            _night_notifications_enabled, settings.health_enabled
+            _night_notifications_enabled, settings.health_enabled, settings.obsidian_sync_enabled
         ),
     )

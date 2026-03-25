@@ -505,8 +505,68 @@ def generate_projects_moc() -> str:
     return "\n".join(lines)
 
 
+THOUGHTS_DIR = VAULT_PATH / "thoughts"
+
+_THOUGHTS_LABELS = {
+    "reflections": ("🪞 Reflections", "personal reflections"),
+    "ideas": ("💡 Ideas", "ideas and insights"),
+    "learnings": ("📚 Learnings", "learnings and discoveries"),
+}
+
+
+def generate_thoughts_moc(category: str) -> str:
+    """Generate MOC for a thoughts subcategory (reflections/ideas/learnings).
+
+    Scans thoughts/{category}/, reads frontmatter + heading, sorts by date (newest first).
+    """
+    cat_dir = THOUGHTS_DIR / category
+    label, description = _THOUGHTS_LABELS.get(category, (category.capitalize(), category))
+    now = datetime.now().strftime("%Y-%m-%d")
+
+    records: list[dict] = []
+    if cat_dir.exists():
+        for md_file in sorted(cat_dir.glob("*.md"), reverse=True):
+            content = md_file.read_text(encoding="utf-8")
+            fm = parse_frontmatter(content)
+            title = extract_title(content) or md_file.stem.replace("-", " ").replace("_", " ").title()
+            rel = relative_path(md_file)
+            desc = fm.get("description", fm.get("summary", ""))
+            date_str = fm.get("date", md_file.stem[:10] if len(md_file.stem) >= 10 else "")
+            records.append({"path": rel, "title": title, "description": desc, "date": date_str})
+
+    lines = [
+        f"# MOC - {label}",
+        "",
+        f"> Map of Content for {description}",
+        f"> Generated: {now} | {len(records)} notes",
+        "",
+        "---",
+        "",
+        "## Recent",
+        "",
+    ]
+
+    if records:
+        for rec in records[:20]:
+            desc = f" — {rec['description']}" if rec["description"] else ""
+            lines.append(f"- [[{rec['path']}|{rec['title']}]]{desc}")
+    else:
+        lines.append("<!-- No notes yet —")
+        lines.append(f"     Add files to thoughts/{category}/ to populate this index -->")
+
+    lines.extend([
+        "",
+        "---",
+        "",
+        f"*Updated automatically by the processor*",
+        "",
+    ])
+
+    return "\n".join(lines)
+
+
 def main():
-    """Generate both MOC files."""
+    """Generate all MOC files."""
     MOC_DIR.mkdir(exist_ok=True)
 
     # Generate Business MOC
@@ -521,13 +581,23 @@ def main():
     proj_path.write_text(proj_content, encoding="utf-8")
     print(f"Generated: {proj_path.relative_to(VAULT_PATH)}")
 
+    # Generate Thoughts MOCs (reflections, ideas, learnings)
+    total_thought_links = 0
+    for category in ("reflections", "ideas", "learnings"):
+        content = generate_thoughts_moc(category)
+        moc_path = MOC_DIR / f"MOC-{category}.md"
+        moc_path.write_text(content, encoding="utf-8")
+        print(f"Generated: {moc_path.relative_to(VAULT_PATH)}")
+        total_thought_links += content.count("[[")
+
     # Stats
     biz_links = biz_content.count("[[")
     proj_links = proj_content.count("[[")
     print(f"\nStats:")
-    print(f"  Business: {biz_links} wikilinks")
-    print(f"  Projects: {proj_links} wikilinks")
-    print(f"  Total:    {biz_links + proj_links} explicit wikilinks")
+    print(f"  Business:   {biz_links} wikilinks")
+    print(f"  Projects:   {proj_links} wikilinks")
+    print(f"  Thoughts:   {total_thought_links} wikilinks")
+    print(f"  Total:      {biz_links + proj_links + total_thought_links} explicit wikilinks")
 
 
 if __name__ == "__main__":

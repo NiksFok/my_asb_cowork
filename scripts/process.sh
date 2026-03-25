@@ -195,6 +195,10 @@ uv run .claude/skills/graph-builder/scripts/analyze.py || echo "Graph rebuild fa
 # Memory decay (update relevance scores and tiers)
 echo "=== Memory decay ==="
 uv run .claude/skills/agent-memory/scripts/memory-engine.py decay . || echo "Memory decay failed (non-critical)"
+
+# Regenerate MOC indexes (reflections, ideas, learnings, business, projects)
+echo "=== Regenerating MOC ==="
+uv run .claude/skills/vault-health/scripts/generate_moc.py || echo "MOC generation failed (non-critical)"
 cd "$PROJECT_DIR"
 
 # Git commit (only vault/)

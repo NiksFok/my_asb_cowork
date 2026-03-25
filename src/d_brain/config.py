@@ -43,6 +43,11 @@ class Settings(BaseSettings):
         description="Enable Oura Ring health module (requires OURA_ACCESS_TOKEN)",
     )
 
+    obsidian_sync_enabled: bool = Field(
+        default=True,
+        description="Push to git after each saved message (Obsidian real-time sync)",
+    )
+
     # Location (updated dynamically by /location command)
     location_city: str = Field(default="Москва", description="Current city name")
     location_lat: float = Field(default=55.75, description="Current latitude")
