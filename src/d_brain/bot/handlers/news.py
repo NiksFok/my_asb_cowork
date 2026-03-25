@@ -45,7 +45,7 @@ async def cmd_news(message: Message) -> None:
     await message.answer(f"📰 <b>Новости на {date_str}</b> — {len(articles)} статей")
 
     for i, art in enumerate(articles):
-        title = art.get("title", "Без названия")
+        title = art.get("title_ru") or art.get("title", "Без названия")
         source = art.get("source", "")
         url = art.get("url", "")
 
@@ -84,7 +84,7 @@ async def _on_news_read(query: CallbackQuery, callback_data: NewsCB) -> None:
         await query.answer("❌ Ошибка чтения статьи.")
         return
 
-    title = art.get("title", "Без названия")
+    title = art.get("title_ru") or art.get("title", "Без названия")
     summary = art.get("summary") or "_Изложение не готово._"
     url = art.get("url", "")
 

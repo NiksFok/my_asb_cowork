@@ -55,16 +55,35 @@ def fetch_article(url: str) -> str:
         return ""
 
 
-def generate_summary(title: str, text: str) -> str:
-    """3-5 bullet points summary via haiku."""
+def generate_summary(title: str, text: str) -> tuple[str, str]:
+    """Return (title_ru, summary) — Russian title + 3-5 bullet points via haiku."""
     if not text:
-        return ""
+        # No article text — translate title only
+        title_ru = run_haiku(
+            f"Переведи заголовок новости на русский язык. Верни только перевод, без кавычек:\n{title}",
+            timeout=20,
+        ) or ""
+        return title_ru, ""
     prompt = (
-        "Выдели 3-5 ключевых мыслей из этой статьи. "
-        "Формат: буллеты на русском, без вводных фраз:\n\n"
+        "Переведи заголовок на русский и выдели 3-5 ключевых мыслей из статьи.\n"
+        "Формат (строго соблюдай):\n"
+        "ЗАГОЛОВОК: <перевод заголовка>\n"
+        "• ключевая мысль 1\n"
+        "• ключевая мысль 2\n"
+        "• ключевая мысль 3\n\n"
         f"Заголовок: {title}\n\n{text[:15000]}"
     )
-    return run_haiku(prompt, timeout=60)
+    result = run_haiku(prompt, timeout=60)
+    if not result:
+        return "", ""
+    title_ru = ""
+    bullets: list[str] = []
+    for line in result.strip().splitlines():
+        if line.startswith("ЗАГОЛОВОК:"):
+            title_ru = line.replace("ЗАГОЛОВОК:", "").strip()
+        elif line.startswith(("•", "-", "*")):
+            bullets.append(line)
+    return title_ru, "\n".join(bullets)
 
 
 def generate_agent_note(title: str, text: str, source: str) -> str | None:
@@ -198,13 +217,14 @@ def main() -> None:
         source = art.get("source", "")
         print(f"[fetch_news] → {title[:70]}", file=sys.stderr)
 
-        text        = fetch_article(url)
-        summary     = generate_summary(title, text) if text else ""
-        agent_note  = generate_agent_note(title, text, source) if text else None
+        text                  = fetch_article(url)
+        title_ru, summary     = generate_summary(title, text)
+        agent_note            = generate_agent_note(title, text, source) if text else None
 
         enriched.append({
             "source":     source,
             "title":      title,
+            "title_ru":   title_ru,
             "url":        url,
             "text":       text[:50000] if text else "",
             "summary":    summary,

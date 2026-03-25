@@ -130,3 +130,18 @@ send_telegram_silent() {
             -d "disable_notification=true" > /dev/null
     fi
 }
+
+# Send message with a single inline button (callback_data)
+# Usage: send_telegram_button "message text" "button label" "callback_data"
+send_telegram_button() {
+    local text="$1"
+    local btn_label="$2"
+    local btn_cb="$3"
+    if [ -z "$text" ] || [ -z "$CHAT_ID" ]; then return 1; fi
+    local keyboard="{\"inline_keyboard\":[[{\"text\":\"$btn_label\",\"callback_data\":\"$btn_cb\"}]]}"
+    curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+        -d "chat_id=$CHAT_ID" \
+        --data-urlencode "text=$text" \
+        -d "parse_mode=HTML" \
+        -d "reply_markup=$keyboard" > /dev/null
+}

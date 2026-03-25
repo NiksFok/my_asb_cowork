@@ -197,6 +197,14 @@ async def cb_weekly(callback: CallbackQuery) -> None:
     await cmd_weekly(callback.message)  # type: ignore[arg-type]
 
 
+@router.callback_query(F.data == "cmd:news")
+async def cb_news(callback: CallbackQuery) -> None:
+    """Inline button: trigger /news."""
+    from d_brain.bot.handlers.news import cmd_news
+    await callback.answer()
+    await cmd_news(callback.message)  # type: ignore[arg-type]
+
+
 @router.callback_query(F.data == "cmd:settings")
 async def cb_settings(callback: CallbackQuery) -> None:
     """Inline button: open Settings menu."""

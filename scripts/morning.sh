@@ -65,4 +65,11 @@ wait $NEWS_PID 2>/dev/null || true  # ensure news fetch is done before git commi
 REPORT_CLEAN=$(clean_claude_output "$REPORT")
 send_telegram "$REPORT_CLEAN"
 
+# Send news button (separate message so user can open /news in one tap)
+send_telegram_button "📰 Утренние новости готовы" "📰 Открыть новости" "cmd:news"
+
+# Sync vault to git (for Obsidian)
+git add vault/ && git commit -m "chore: morning briefing $TODAY" || true
+git push || echo "Git push failed (non-critical)"
+
 echo "=== Morning briefing done ==="

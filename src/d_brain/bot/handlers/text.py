@@ -10,6 +10,7 @@ from aiogram import Router
 from aiogram.types import Message
 
 from d_brain.config import get_settings
+from d_brain.services.git import VaultGit
 from d_brain.services.reflection import ReflectionService
 from d_brain.services.session import SessionStore
 from d_brain.services.storage import VaultStorage
@@ -28,6 +29,17 @@ logger = logging.getLogger(__name__)
 
 _DONE_KEYWORDS = {"готово", "done", "finish", "закончил", "закончила", "все"}
 _TG_LIMIT = 4000
+# Internal/corporate domains — skip scraping, save as-is
+_INTERNAL_HOSTS = ("tbank", "tcsbank", "time")
+
+
+def _is_internal_url(url: str) -> bool:
+    """True if URL belongs to an internal/corporate domain (scraping not expected to work)."""
+    try:
+        host = url.split("/")[2].lower()
+        return any(kw in host for kw in _INTERNAL_HOSTS)
+    except Exception:
+        return False
 
 
 def _log_error_to_notes(vault_path: Path, source: str, error: Exception) -> None:
@@ -104,6 +116,10 @@ async def handle_text(message: Message) -> None:
 
     await message.answer(f"✓ Сохранено{extra}")
     logger.info("Text message saved: %d chars%s", len(message.text), extra)
+    if settings.obsidian_sync_enabled:
+        asyncio.create_task(asyncio.to_thread(
+            VaultGit(settings.vault_path).commit_and_push, "sync: text"
+        ))
 
 
 async def _handle_youtube(message: Message, video_id: str, settings) -> None:  # type: ignore[type-arg]
@@ -187,6 +203,10 @@ async def _handle_youtube(message: Message, video_id: str, settings) -> None:  #
             "YouTube saved: %s, transcript=%d chars, comments=%d",
             video_id, len(transcript), len(comments),
         )
+        if settings.obsidian_sync_enabled:
+            asyncio.create_task(asyncio.to_thread(
+                VaultGit(settings.vault_path).commit_and_push, "sync: youtube"
+            ))
 
     except Exception as exc:
         logger.exception("YouTube processing error")
@@ -239,6 +259,27 @@ async def _handle_urls(message: Message, settings) -> None:  # type: ignore[type
             except Exception:
                 pass
 
+            if _is_internal_url(url):
+                # Internal corporate link — save text + URL without scraping
+                note_block = f"\n📝 Заметка: {user_note}" if user_note else ""
+                vault_text = f"🔒 {url}{note_block}"
+                storage.append_to_daily(vault_text, timestamp, "[url]")
+                session.append(
+                    message.from_user.id,
+                    "url",
+                    text=vault_text,
+                    msg_id=message.message_id,
+                )
+                if week:
+                    reflection.append_entry(week, vault_text, source="url")
+                collected.append({"url": url, "internal": True})
+                logger.info("Internal URL saved (no scraping): %s", url)
+                if settings.obsidian_sync_enabled:
+                    asyncio.create_task(asyncio.to_thread(
+                        VaultGit(settings.vault_path).commit_and_push, "sync: url"
+                    ))
+                continue
+
             try:
                 result = await scrape_webpage(url)
                 title = result["title"]
@@ -271,18 +312,34 @@ async def _handle_urls(message: Message, settings) -> None:  # type: ignore[type
 
                 collected.append({"title": title, "url": url, "text": text, "comments": comments})
                 logger.info("Webpage saved: url=%s, text=%d chars, comments=%d", url, len(text), len(comments))
+                if settings.obsidian_sync_enabled:
+                    asyncio.create_task(asyncio.to_thread(
+                        VaultGit(settings.vault_path).commit_and_push, "sync: url"
+                    ))
 
             except Exception:
                 logger.exception("Webpage scraping error for %s", url)
                 collected.append({"url": url, "failed": True})
 
         # ── Build response ──
-        ok = [a for a in collected if not a.get("failed")]
+        ok = [a for a in collected if not a.get("failed") and not a.get("internal")]
+        internal_urls = [a["url"] for a in collected if a.get("internal")]
         failed_urls = [a["url"] for a in collected if a.get("failed")]
         extra = " (+ рефлексия недели)" if week else ""
 
-        if not ok:
+        if not ok and not internal_urls:
             await status_msg.edit_text("⚠️ Ничего не удалось прочитать.")
+            return
+
+        if not ok and internal_urls:
+            domains = ", ".join(dict.fromkeys(u.split("/")[2] for u in internal_urls if "/" in u))
+            reply = f"✓ Сохранено{extra}\n🔒 Внутренняя ссылка: {domains}"
+            if failed_urls:
+                reply += "\n❌ Не удалось: " + ", ".join(failed_urls)
+            try:
+                await status_msg.edit_text(reply)
+            except Exception:
+                await status_msg.edit_text(reply, parse_mode=None)
             return
 
         if len(ok) == 1:
