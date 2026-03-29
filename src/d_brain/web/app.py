@@ -213,3 +213,202 @@ async def _send_telegram(token: str, user_id: int, text: str) -> None:
     async with httpx.AsyncClient(timeout=30) as client:
         for i in range(0, len(text), 4000):
             await client.post(url, json={"chat_id": user_id, "text": text[i : i + 4000]})
+
+
+# ──────────────────────── Nutrition Dashboard ────────────────────────
+
+@app.get("/nutrition", response_class=HTMLResponse)
+async def nutrition_dashboard() -> str:
+    settings = get_settings()
+    user_id = settings.allowed_user_ids[0] if settings.allowed_user_ids else 0
+
+    if not settings.supabase_url or not settings.supabase_key:
+        return HTMLResponse("<h2>Supabase не настроен</h2>", status_code=503)
+
+    try:
+        from d_brain.services.nutrition import get_nutrition_service
+        svc = get_nutrition_service()
+        today = await svc.get_today_progress(user_id)
+        weekly = await svc.get_weekly_data(user_id, days=14)
+        recent = await svc.get_recent_meals(user_id, limit=10)
+    except Exception as e:
+        logger.exception("Nutrition dashboard error")
+        return HTMLResponse(f"<h2>Ошибка: {e}</h2>", status_code=500)
+
+    import json as _json
+    today_json = _json.dumps(today, default=str)
+    weekly_json = _json.dumps(weekly, default=str)
+    recent_json = _json.dumps(recent, default=str)
+
+    html = _NUTRITION_TMPL.replace("__TODAY__", today_json)
+    html = html.replace("__WEEKLY__", weekly_json)
+    html = html.replace("__RECENT__", recent_json)
+    return html
+
+
+_NUTRITION_TMPL = r"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>d-brain · Питание</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+         background:#0f0f0f;color:#e0e0e0;padding:20px;min-height:100vh}
+    a.back{display:inline-block;margin-bottom:20px;color:#6366f1;text-decoration:none;font-size:14px}
+    h1{font-size:22px;font-weight:700;margin-bottom:4px}
+    .sub{font-size:13px;color:#666;margin-bottom:24px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:24px}
+    .card{background:#1a1a1a;border-radius:14px;padding:20px}
+    .card h2{font-size:14px;color:#888;font-weight:500;margin-bottom:14px;text-transform:uppercase;letter-spacing:.5px}
+    .macros{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .macro{background:#222;border-radius:10px;padding:12px}
+    .macro .val{font-size:22px;font-weight:700;color:#e0e0e0}
+    .macro .lbl{font-size:11px;color:#666;margin-top:2px}
+    .macro .pct{font-size:11px;color:#6366f1;margin-top:1px}
+    .bar-wrap{margin-bottom:10px}
+    .bar-label{display:flex;justify-content:space-between;font-size:12px;color:#888;margin-bottom:4px}
+    .bar-bg{background:#222;border-radius:4px;height:8px;overflow:hidden}
+    .bar-fill{height:100%;border-radius:4px;transition:width .4s}
+    .bar-kcal{background:#6366f1}
+    .bar-prot{background:#22c55e}
+    .bar-fat{background:#f59e0b}
+    .bar-carb{background:#3b82f6}
+    .chart-wrap{position:relative;height:200px}
+    .meals-list{list-style:none}
+    .meals-list li{padding:12px 0;border-bottom:1px solid #222;font-size:13px}
+    .meals-list li:last-child{border-bottom:none}
+    .meal-head{display:flex;justify-content:space-between;margin-bottom:4px}
+    .meal-type{font-weight:600;color:#e0e0e0}
+    .meal-kcal{color:#6366f1;font-weight:600}
+    .meal-desc{color:#888;margin-bottom:4px}
+    .meal-comment{color:#555;font-size:11px;font-style:italic}
+    .tip{background:#1a1a2e;border-left:3px solid #6366f1;padding:10px 14px;border-radius:0 8px 8px 0;font-size:13px;color:#aaa;margin-top:16px}
+    .over{color:#ef4444 !important}
+  </style>
+</head>
+<body>
+  <a class="back" href="/">← Главная</a>
+  <h1>🥗 Питание</h1>
+  <p class="sub" id="dateStr"></p>
+
+  <div class="grid">
+    <!-- Today macros -->
+    <div class="card" id="todayCard">
+      <h2>Сегодня</h2>
+      <div id="barsWrap"></div>
+      <div class="macros" id="macrosGrid"></div>
+    </div>
+    <!-- Weekly chart -->
+    <div class="card">
+      <h2>Калории за 14 дней</h2>
+      <div class="chart-wrap"><canvas id="kcalChart"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Recent meals -->
+  <div class="card">
+    <h2>Последние приёмы пищи</h2>
+    <ul class="meals-list" id="mealsList"></ul>
+  </div>
+
+<script>
+const TODAY   = __TODAY__;
+const WEEKLY  = __WEEKLY__;
+const RECENT  = __RECENT__;
+
+const MEAL_EMOJI = {завтрак:"🌅",обед:"☀️",ужин:"🌙",перекус:"🍎"};
+
+// ── date subtitle ──
+document.getElementById("dateStr").textContent =
+  new Date().toLocaleDateString("ru-RU",{weekday:"long",day:"numeric",month:"long"});
+
+// ── progress bars ──
+function bar(id, label, val, goal, cls) {
+  const pct = goal > 0 ? Math.min(Math.round(val/goal*100), 100) : 0;
+  const over = val > goal;
+  return `<div class="bar-wrap">
+    <div class="bar-label">
+      <span>${label}</span>
+      <span class="${over?"over":""}">${val} / ${goal}</span>
+    </div>
+    <div class="bar-bg"><div class="bar-fill ${cls}" style="width:${pct}%"></div></div>
+  </div>`;
+}
+document.getElementById("barsWrap").innerHTML =
+  bar("k","Калории ккал", TODAY.total_calories||0, TODAY.goal_calories||2000, "bar-kcal") +
+  bar("p","Белки г",      TODAY.total_protein||0,  TODAY.goal_protein||155,   "bar-prot") +
+  bar("f","Жиры г",       TODAY.total_fat||0,       TODAY.goal_fat||55,        "bar-fat")  +
+  bar("c","Углеводы г",   TODAY.total_carbs||0,     TODAY.goal_carbs||220,     "bar-carb");
+
+// ── macro tiles ──
+function tile(val, lbl, goal, color) {
+  const pct = goal>0?Math.round(val/goal*100):0;
+  return `<div class="macro">
+    <div class="val" style="color:${color}">${val}</div>
+    <div class="lbl">${lbl}</div>
+    <div class="pct">${pct}% от нормы</div>
+  </div>`;
+}
+document.getElementById("macrosGrid").innerHTML =
+  tile(TODAY.total_calories||0, "ккал", TODAY.goal_calories||2000, "#6366f1") +
+  tile(TODAY.total_protein||0,  "белки г", TODAY.goal_protein||155, "#22c55e") +
+  tile(TODAY.total_fat||0,      "жиры г", TODAY.goal_fat||55, "#f59e0b") +
+  tile(TODAY.total_carbs||0,    "углеводы г", TODAY.goal_carbs||220, "#3b82f6");
+
+// ── weekly chart ──
+if (WEEKLY.length > 0) {
+  new Chart(document.getElementById("kcalChart"), {
+    type: "bar",
+    data: {
+      labels: WEEKLY.map(d => d.date.slice(5)),
+      datasets: [{
+        label: "Калории",
+        data: WEEKLY.map(d => d.total_calories||0),
+        backgroundColor: WEEKLY.map(d =>
+          (d.total_calories||0) > (d.goal_calories||2000) ? "#ef444480" : "#6366f180"),
+        borderColor: WEEKLY.map(d =>
+          (d.total_calories||0) > (d.goal_calories||2000) ? "#ef4444" : "#6366f1"),
+        borderWidth: 2, borderRadius: 4,
+      },{
+        label: "Норма",
+        data: WEEKLY.map(d => d.goal_calories||2000),
+        type: "line", borderColor: "#ffffff30", borderDash: [4,4],
+        pointRadius: 0, fill: false,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {legend:{display:false}},
+      scales: {
+        x: {grid:{color:"#222"},ticks:{color:"#666",font:{size:11}}},
+        y: {grid:{color:"#222"},ticks:{color:"#666",font:{size:11}},min:0}
+      }
+    }
+  });
+}
+
+// ── recent meals ──
+const list = document.getElementById("mealsList");
+if (RECENT.length === 0) {
+  list.innerHTML = "<li style='color:#555;padding:16px 0'>Приёмов пищи пока нет</li>";
+} else {
+  list.innerHTML = RECENT.map(m => {
+    const dt = new Date(m.logged_at);
+    const time = dt.toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"});
+    const emoji = MEAL_EMOJI[m.meal_type] || "🍽";
+    return `<li>
+      <div class="meal-head">
+        <span class="meal-type">${emoji} ${m.meal_type||"приём"} · ${time}</span>
+        <span class="meal-kcal">${m.calories||0} ккал</span>
+      </div>
+      <div class="meal-desc">${m.description||""}</div>
+      ${m.nutritionist_comment
+        ? `<div class="meal-comment">${m.nutritionist_comment}</div>` : ""}
+    </li>`;
+  }).join("");
+}
+</script>
+</body></html>"""

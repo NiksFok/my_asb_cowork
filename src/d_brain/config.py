@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     todoist_api_key: str = Field(default="", description="Todoist API key for tasks")
     youtube_api_key: str = Field(default="", description="YouTube Data API v3 key")
     firecrawl_api_key: str = Field(default="", description="Firecrawl API key for web scraping")
+    supabase_url: str = Field(default="", description="Supabase project URL (e.g. https://xxx.supabase.co)")
+    supabase_key: str = Field(default="", description="Supabase service_role key")
     vault_path: Path = Field(
         default=Path("./vault"),
         description="Path to Obsidian vault directory",
@@ -64,6 +66,21 @@ class Settings(BaseSettings):
     location_lat: float = Field(default=55.75, description="Current latitude")
     location_lon: float = Field(default=37.62, description="Current longitude")
     location_tz: str = Field(default="Europe/Moscow", description="Current IANA timezone")
+
+
+    # Nutrition profile (used by nutritionist sub-agent)
+    # Calculate your targets: https://www.calculator.net/calorie-calculator.html
+    nutrition_height_cm: int = Field(default=175, description="Height in cm")
+    nutrition_weight_kg: float = Field(default=80.0, description="Current weight in kg")
+    nutrition_age: int = Field(default=30, description="Age in years")
+    nutrition_gender: str = Field(default="мужчина", description="Gender (мужчина/женщина)")
+    nutrition_activity: str = Field(default="умеренная активность", description="Activity level description")
+    nutrition_goal: str = Field(default="поддерживать вес", description="Nutrition goal description")
+    nutrition_notes: str = Field(default="", description="Dietary restrictions or preferences")
+    nutrition_daily_kcal: int = Field(default=2000, description="Daily calorie target (kcal)")
+    nutrition_daily_protein: float = Field(default=150.0, description="Daily protein target (g)")
+    nutrition_daily_fat: float = Field(default=55.0, description="Daily fat target (g)")
+    nutrition_daily_carbs: float = Field(default=220.0, description="Daily carbs target (g)")
 
     @property
     def daily_path(self) -> Path:

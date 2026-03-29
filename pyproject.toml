@@ -4,7 +4,7 @@ version = "1.0.0"
 description = "Voice-first personal assistant for Telegram with Obsidian and Todoist integration"
 readme = "README.md"
 authors = [
-    { name = "Agent Second Brain Contributors" }
+    { name = "smixs", email = "mixshima@gmail.com" }
 ]
 requires-python = ">=3.12"
 dependencies = [
@@ -23,6 +23,7 @@ dependencies = [
     "python-docx>=1.1.0",
     "trafilatura>=2.0.0",
     "anthropic>=0.50",
+    "supabase>=2.0",
 ]
 
 [project.optional-dependencies]

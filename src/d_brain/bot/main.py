@@ -26,7 +26,7 @@ def create_bot(settings: Settings) -> Bot:
 def create_dispatcher() -> Dispatcher:
     """Create and configure the dispatcher with routers."""
     from d_brain.bot.handlers import (
-        buttons, commands, do, document, done, edit, fix, forward, location, news, improve, photo, process, text, voice, weekly,
+        buttons, commands, do, document, done, edit, fix, food, forward, improve, location, news, photo, process, text, video, voice, weekly,
     )
 
     # Use memory storage for FSM (required for /do command state)
@@ -41,11 +41,13 @@ def create_dispatcher() -> Dispatcher:
     dp.include_router(done.router)  # /done — finalize reflection
     dp.include_router(fix.router)   # /fix — add correction rule
     dp.include_router(edit.router)  # Edit mode — batch corrections
+    dp.include_router(food.router)      # Food session — before photo/voice/text to catch FoodState
     dp.include_router(buttons.router)  # Reply keyboard buttons
     dp.include_router(voice.router)
     dp.include_router(photo.router)
     dp.include_router(document.router)
     dp.include_router(forward.router)
+    dp.include_router(video.router)  # Direct (non-forwarded) video/video_note
     dp.include_router(news.router)
     dp.include_router(improve.router)
     dp.include_router(text.router)  # Must be last (catch-all for text)

@@ -38,6 +38,16 @@ echo "=== Pulling latest vault changes ==="
 cd "$PROJECT_DIR"
 git pull --rebase --autostash || echo "Git pull failed (non-critical)"
 
+# Check git sync freshness
+LAST_COMMIT_TS=$(git log -1 --format=%ct 2>/dev/null || echo 0)
+NOW_TS=$(date +%s)
+DIFF_H=$(( (NOW_TS - LAST_COMMIT_TS) / 3600 ))
+GIT_SYNC_WARNING=""
+if [ "$DIFF_H" -gt 24 ]; then
+    DIFF_DAYS=$(( DIFF_H / 24 ))
+    GIT_SYNC_WARNING="⚠️ Git sync: последний коммит ${DIFF_DAYS} дней назад"
+fi
+
 cd "$VAULT_DIR"
 REPORT=$(claude --print --dangerously-skip-permissions --model claude-sonnet-4-6 \
     --mcp-config "$PROJECT_DIR/mcp-config.json" \
@@ -64,6 +74,9 @@ echo "$REPORT"
 wait $NEWS_PID 2>/dev/null || true  # ensure news fetch is done before git commit
 REPORT_CLEAN=$(clean_claude_output "$REPORT")
 send_telegram "$REPORT_CLEAN"
+if [ -n "$GIT_SYNC_WARNING" ]; then
+    send_telegram "$GIT_SYNC_WARNING"
+fi
 
 # Send news button (separate message so user can open /news in one tap)
 send_telegram_button "📰 Утренние новости готовы" "📰 Открыть новости" "cmd:news"

@@ -24,8 +24,8 @@ def get_main_keyboard(settings: Settings | None = None) -> ReplyKeyboardMarkup:
     builder.button(text="📅 Неделя")
     builder.button(text="⚙️ Настройки")
 
-    # Row 2: Правки + optional onboarding/improve buttons
-    row2 = ["✏️ Правки"]
+    # Row 2: Еда + Правки + optional onboarding/improve buttons
+    row2 = ["🍽 Еда", "✏️ Правки"]
     if settings.first_seen:
         try:
             days_since = (date.today() - date.fromisoformat(settings.first_seen)).days
@@ -40,6 +40,15 @@ def get_main_keyboard(settings: Settings | None = None) -> ReplyKeyboardMarkup:
         builder.button(text=text)
 
     builder.adjust(3, len(row2))
+    return builder.as_markup(resize_keyboard=True, is_persistent=True)
+
+
+def get_food_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard shown during food logging session."""
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="✅ Записал всё")
+    builder.button(text="❌ Отмена")
+    builder.adjust(2)
     return builder.as_markup(resize_keyboard=True, is_persistent=True)
 
 

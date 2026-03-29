@@ -1,5 +1,6 @@
-"""Document message handler (.txt, .md, .pdf, .xlsx, .docx)."""
+"""Document message handler (.txt, .md, .pdf, .xlsx, .docx, video)."""
 
+import asyncio
 import io
 import logging
 from datetime import datetime
@@ -8,8 +9,11 @@ from aiogram import Bot, Router
 from aiogram.types import Message
 
 from d_brain.config import get_settings
+from d_brain.services.corrections import CorrectionsService
+from d_brain.services.git import VaultGit
 from d_brain.services.session import SessionStore
 from d_brain.services.storage import VaultStorage
+from d_brain.services.transcription import DeepgramTranscriber
 
 router = Router(name="document")
 logger = logging.getLogger(__name__)
@@ -21,6 +25,14 @@ SUPPORTED_MIMES = {
     "application/pdf",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+VIDEO_MIMES = {
+    "video/mp4",
+    "video/quicktime",
+    "video/x-matroska",
+    "video/webm",
+    "video/avi",
+    "video/x-msvideo",
 }
 MAX_TEXT_CHARS = 50_000
 
@@ -89,9 +101,13 @@ async def handle_document(message: Message, bot: Bot) -> None:
     ext = _detect_extension(filename, mime)
 
     if ext is None:
+        # Video document — transcribe audio
+        if mime in VIDEO_MIMES or (filename and any(filename.lower().endswith(e) for e in (".mp4", ".mov", ".mkv", ".webm", ".avi"))):
+            await _handle_video_document(message, bot, filename)
+            return
         await message.answer(
             f"⚠️ Формат не поддерживается: <code>{filename}</code>\n"
-            "Поддерживаются: .txt .md .pdf .xlsx .docx"
+            "Поддерживаются: .txt .md .pdf .xlsx .docx, видео (.mp4 .mov .mkv)"
         )
         return
 
@@ -144,8 +160,67 @@ async def handle_document(message: Message, bot: Bot) -> None:
         caption_note = " + комментарий" if message.caption else ""
         trunc_note = " (обрезан)" if truncated else ""
         await message.answer(f"📄 ✓ Сохранено: {filename}{caption_note}{trunc_note}")
+        if settings.obsidian_sync_enabled:
+            asyncio.create_task(asyncio.to_thread(
+                VaultGit(settings.vault_path).commit_and_push, "sync: document"
+            ))
         logger.info("Document saved: %s (%d chars)", filename, len(text))
 
     except Exception:
         logger.exception("Error processing document: %s", filename)
         await message.answer(f"❌ Не удалось обработать файл: {filename}")
+
+
+async def _handle_video_document(message: Message, bot: Bot, filename: str) -> None:
+    """Transcribe video sent as a document file."""
+    if not message.document or not message.from_user:
+        return
+    await message.chat.do(action="typing")
+    settings = get_settings()
+    storage = VaultStorage(settings.vault_path)
+    try:
+        file = await bot.get_file(message.document.file_id)
+        if not file.file_path:
+            await message.answer("❌ Не удалось скачать видео")
+            return
+        file_bytes_io = await bot.download_file(file.file_path)
+        if not file_bytes_io:
+            await message.answer("❌ Не удалось скачать видео")
+            return
+        video_bytes = file_bytes_io.read()
+    except Exception as e:
+        logger.exception("Failed to download video document: %s", filename)
+        await message.answer(f"❌ Ошибка загрузки: {e}")
+        return
+
+    transcript = ""
+    try:
+        transcriber = DeepgramTranscriber(settings.deepgram_api_key)
+        transcript = await transcriber.transcribe(video_bytes)
+    except Exception:
+        logger.warning("Video document transcription failed: %s", filename, exc_info=True)
+
+    timestamp = datetime.fromtimestamp(message.date.timestamp())
+
+    if transcript:
+        corrections = CorrectionsService(settings.vault_path)
+        corrected, applied = corrections.apply(transcript)
+        caption = message.caption or ""
+        content = f"{caption}\n\n{corrected}".strip() if caption else corrected
+        storage.append_to_daily(content, timestamp, f"[doc: {filename}]")
+        session = SessionStore(settings.vault_path)
+        session.append(message.from_user.id, "document", filename=filename, text=corrected, msg_id=message.message_id)
+        note = f"\n<i>Исправлено: {', '.join(applied)}</i>" if applied else ""
+        await message.answer(f"🎬 {corrected}\n\n✓ Сохранено: {filename}{note}")
+        logger.info("Video document transcribed: %s (%d chars)", filename, len(corrected))
+    else:
+        content = message.caption or f"[видео: {filename}]"
+        storage.append_to_daily(content, timestamp, f"[doc: {filename}]")
+        session = SessionStore(settings.vault_path)
+        session.append(message.from_user.id, "document", filename=filename, text=content, msg_id=message.message_id)
+        await message.answer(f"🎬 ✓ Сохранено: {filename} (аудио не распознано)")
+
+    if settings.obsidian_sync_enabled:
+        asyncio.create_task(asyncio.to_thread(
+            VaultGit(settings.vault_path).commit_and_push, f"sync: video doc {filename}"
+        ))

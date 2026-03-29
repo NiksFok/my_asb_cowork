@@ -23,6 +23,12 @@ class AgentSessionState(StatesGroup):
     awaiting_permission = State() # Claude paused, waiting for user approval
 
 
+class FoodState(StatesGroup):
+    """States for food logging session."""
+
+    collecting = State()  # Collecting photos/voice/text for a meal
+
+
 class SettingsState(StatesGroup):
     """States for Settings menu flows."""
 

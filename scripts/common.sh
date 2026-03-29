@@ -76,6 +76,9 @@ for pattern in [
     r"^Вот HTML для Telegram[:\s]*",
     r"^Вот готовый HTML[:\s]*",
     r"^Готовые HTML для вставки в Телеграм[:\s]*",
+    r"^HTML report \(output for Telegram\)[:\s]*",
+    r"^Here is the HTML report[:\s]*",
+    r"^All files updated[.!\s]*(?:Here is[^:\n]*:)?\s*",
 ]:
     text = re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
 
