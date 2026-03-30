@@ -1,16 +1,15 @@
-"""Nutrition sub-agent: Claude SDK + Supabase for food logging and analysis."""
+"""Nutrition sub-agent: claude CLI + Supabase for food logging and analysis."""
 
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import logging
+import os
+import tempfile
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
-
-import anthropic
 
 logger = logging.getLogger(__name__)
 
@@ -79,11 +78,10 @@ class MealAnalysis:
 
 
 class NutritionService:
-    """Nutrition analysis via Anthropic SDK + data persistence via Supabase."""
+    """Nutrition analysis via claude CLI + data persistence via Supabase."""
 
     def __init__(
         self,
-        anthropic_api_key: str,
         supabase_url: str,
         supabase_key: str,
         height_cm: int = 175,
@@ -98,7 +96,6 @@ class NutritionService:
         daily_fat: float = _DEFAULT_FAT,
         daily_carbs: float = _DEFAULT_CARBS,
     ) -> None:
-        self._claude = anthropic.AsyncAnthropic(api_key=anthropic_api_key)
         self._supabase_url = supabase_url
         self._supabase_key = supabase_key
         self._daily_kcal = daily_kcal
@@ -165,47 +162,68 @@ class NutritionService:
         texts: list[str],
         oura_steps: int,
     ) -> MealAnalysis:
-        content: list[Any] = []
+        temp_files: list[str] = []
+        try:
+            photo_paths: list[str] = []
+            for photo_bytes in photo_bytes_list:
+                tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+                tmp.write(photo_bytes)
+                tmp.close()
+                photo_paths.append(tmp.name)
+                temp_files.append(tmp.name)
 
-        for photo_bytes in photo_bytes_list:
-            b64 = base64.standard_b64encode(photo_bytes).decode()
-            content.append({
-                "type": "image",
-                "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
-            })
+            parts: list[str] = []
+            if photo_paths:
+                paths_str = "\n".join(f"- {p}" for p in photo_paths)
+                parts.append(
+                    f"Фотографии еды (прочитай с помощью Read tool):\n{paths_str}"
+                )
+            if texts:
+                parts.append("Описание от пользователя:\n" + "\n".join(texts))
+            if oura_steps:
+                parts.append(f"Данные активности сегодня: {oura_steps} шагов.")
+            parts.append("Проанализируй этот приём пищи и ответь ТОЛЬКО валидным JSON.")
 
-        text_parts = []
-        if texts:
-            text_parts.append("Описание от пользователя:\n" + "\n".join(texts))
-        if oura_steps:
-            text_parts.append(f"Данные активности сегодня: {oura_steps} шагов.")
-        text_parts.append("Проанализируй этот приём пищи и ответь JSON.")
-        content.append({"type": "text", "text": "\n\n".join(text_parts)})
+            prompt = "\n\n".join(parts)
 
-        response = await self._claude.messages.create(
-            model="claude-opus-4-6",
-            max_tokens=1024,
-            system=self._system_prompt,
-            messages=[{"role": "user", "content": content}],
-        )
+            proc = await asyncio.create_subprocess_exec(
+                "claude", "--print",
+                "--model", "claude-opus-4-6",
+                "--dangerously-skip-permissions",
+                "--system-prompt", self._system_prompt,
+                "-p", prompt,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
 
-        raw = response.content[0].text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        data = json.loads(raw)
-        return MealAnalysis(
-            meal_type=data.get("meal_type", "перекус"),
-            description=data.get("description", ""),
-            calories=int(data.get("calories", 0)),
-            protein=float(data.get("protein", 0)),
-            fat=float(data.get("fat", 0)),
-            carbs=float(data.get("carbs", 0)),
-            fiber=float(data.get("fiber", 0)),
-            comment=data.get("comment", ""),
-            recommendation=data.get("recommendation", ""),
-        )
+            if proc.returncode != 0:
+                err = stderr.decode(errors="replace")[:300]
+                raise RuntimeError(f"claude CLI failed: {err}")
+
+            raw = stdout.decode().strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            data = json.loads(raw)
+            return MealAnalysis(
+                meal_type=data.get("meal_type", "перекус"),
+                description=data.get("description", ""),
+                calories=int(data.get("calories", 0)),
+                protein=float(data.get("protein", 0)),
+                fat=float(data.get("fat", 0)),
+                carbs=float(data.get("carbs", 0)),
+                fiber=float(data.get("fiber", 0)),
+                comment=data.get("comment", ""),
+                recommendation=data.get("recommendation", ""),
+            )
+        finally:
+            for f in temp_files:
+                try:
+                    os.unlink(f)
+                except Exception:
+                    pass
 
     # ─────────────────────────── Supabase writes ───────────────────────────
 
@@ -365,7 +383,6 @@ def get_nutrition_service() -> NutritionService:
     from d_brain.config import get_settings
     s = get_settings()
     return NutritionService(
-        anthropic_api_key=s.anthropic_api_key,
         supabase_url=s.supabase_url,
         supabase_key=s.supabase_key,
         height_cm=s.nutrition_height_cm,
