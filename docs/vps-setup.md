@@ -12,10 +12,8 @@ Run Agent Second Brain 24/7 on a virtual private server.
 
 | Provider | Price | Region |
 |----------|-------|--------|
-| Contabo | from $5/mo | Europe |
-| Hetzner | from $4/mo | Europe |
-| DigitalOcean | from $6/mo | Global |
-| Vultr | from $5/mo | Global |
+| Adminvps | from $5/mo | Europe |
+| Ls-hosting | from $5/mo | USA |
 
 ---
 
