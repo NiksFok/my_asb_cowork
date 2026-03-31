@@ -101,6 +101,13 @@ def get_help_inline_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def get_meal_done_keyboard(meal_id: str) -> InlineKeyboardMarkup:
+    """Inline keyboard shown after meal is recorded — allows quick undo."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="↩️ Отменить запись", callback_data=f"food:undo:{meal_id}")
+    return builder.as_markup()
+
+
 def get_settings_keyboard(
     night_notifications: bool = True,
     health_enabled: bool = False,

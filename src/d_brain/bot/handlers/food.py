@@ -20,9 +20,9 @@ from datetime import datetime
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 
-from d_brain.bot.keyboards import get_food_keyboard, get_main_keyboard
+from d_brain.bot.keyboards import get_food_keyboard, get_main_keyboard, get_meal_done_keyboard
 from d_brain.bot.states import FoodState
 from d_brain.config import get_settings
 from d_brain.services.git import VaultGit
@@ -276,7 +276,17 @@ async def _process_food_session(
         message_id=processing_msg.message_id,
         parse_mode="HTML",
     )
-    await bot.send_message(chat_id, "✅ Записано в базу.", reply_markup=get_main_keyboard())
+    await bot.send_message(
+        chat_id,
+        "✅ Записано в базу.",
+        reply_markup=get_main_keyboard(),
+    )
+    if analysis.meal_id:
+        await bot.send_message(
+            chat_id,
+            "Ошибка в записи? Отмени:",
+            reply_markup=get_meal_done_keyboard(analysis.meal_id),
+        )
 
 
 def _write_meal_to_vault(settings: "Settings", analysis: "MealAnalysis", user_id: int) -> None:  # type: ignore[name-defined]
@@ -335,6 +345,55 @@ def _bar(value: float, goal: float, width: int = 10) -> str:
     over = value > goal
     char = "█" if not over else "▓"
     return char * filled + "░" * (width - filled)
+
+
+# ────────────────────────── meal undo ──────────────────────────
+
+@router.callback_query(F.data.startswith("food:undo:"))
+async def cb_meal_undo(callback: CallbackQuery) -> None:
+    """Delete a specific meal by ID (inline ↩️ button after analysis)."""
+    if not callback.from_user or not callback.data:
+        return
+    meal_id = callback.data.removeprefix("food:undo:")
+    try:
+        from d_brain.services.nutrition import get_nutrition_service
+        svc = get_nutrition_service()
+        deleted = await svc.delete_meal(meal_id, callback.from_user.id)
+    except Exception as e:
+        logger.exception("Meal undo error")
+        await callback.answer(f"Ошибка: {e}", show_alert=True)
+        return
+    if deleted:
+        await callback.answer("Запись удалена")
+        await callback.message.edit_text("↩️ Запись отменена.")  # type: ignore[union-attr]
+    else:
+        await callback.answer("Запись не найдена (уже удалена?)", show_alert=True)
+
+
+@router.message(Command("meal_undo"))
+async def cmd_meal_undo(message: Message) -> None:
+    """Delete the last recorded meal. Usage: /meal_undo"""
+    if not message.from_user:
+        return
+    settings = get_settings()
+    if not settings.supabase_url or not settings.supabase_key:
+        await message.answer("Supabase не настроен.")
+        return
+    try:
+        from d_brain.services.nutrition import get_nutrition_service
+        svc = get_nutrition_service()
+        deleted = await svc.delete_last_meal(message.from_user.id)
+    except Exception as e:
+        logger.exception("meal_undo error")
+        await message.answer(f"Ошибка: {e}")
+        return
+    if deleted:
+        t = deleted.get("meal_type", "запись")
+        desc = deleted.get("description", "")[:50]
+        kcal = deleted.get("calories", 0)
+        await message.answer(f"↩️ Удалено: <b>{t}</b> — {desc} ({kcal} ккал)")
+    else:
+        await message.answer("Нет записей для удаления.")
 
 
 # ────────────────────────── timeout helpers ──────────────────────────

@@ -154,6 +154,41 @@ class NutritionService:
         """Create Supabase tables if they don't exist yet (idempotent)."""
         await asyncio.to_thread(self._create_tables)
 
+    async def delete_meal(self, meal_id: str, user_id: int) -> bool:
+        """Delete a meal by ID (only if it belongs to user_id). Returns True if deleted."""
+        deleted = await asyncio.to_thread(self._delete_meal, meal_id, user_id)
+        if deleted:
+            await asyncio.to_thread(self._update_daily_summary, user_id, date.today())
+        return deleted
+
+    async def delete_last_meal(self, user_id: int) -> dict[str, Any] | None:
+        """Delete the most recent meal for this user. Returns deleted row or None."""
+        result = await asyncio.to_thread(self._pop_last_meal, user_id)
+        if result:
+            await asyncio.to_thread(self._update_daily_summary, user_id, date.today())
+        return result
+
+    def _delete_meal(self, meal_id: str, user_id: int) -> bool:
+        db = self._get_db()
+        result = db.table("meals").delete().eq("id", meal_id).eq("user_id", user_id).execute()
+        return bool(result.data)
+
+    def _pop_last_meal(self, user_id: int) -> dict[str, Any] | None:
+        db = self._get_db()
+        rows = (
+            db.table("meals")
+            .select("id,meal_type,description,calories,logged_at")
+            .eq("user_id", user_id)
+            .order("logged_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if not rows.data:
+            return None
+        row = rows.data[0]
+        db.table("meals").delete().eq("id", row["id"]).execute()
+        return row
+
     # ─────────────────────────── Claude call ───────────────────────────
 
     async def _call_claude(
