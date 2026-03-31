@@ -14,6 +14,22 @@ from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
+# Cache: True/False once we know if is_deleted column exists
+_schema_v2_ok: bool | None = None
+
+
+def _has_schema_v2(db: Any) -> bool:
+    """Return True if meals.is_deleted column exists (checked once, then cached)."""
+    global _schema_v2_ok
+    if _schema_v2_ok is not None:
+        return _schema_v2_ok
+    try:
+        db.table("meals").select("is_deleted").limit(1).execute()
+        _schema_v2_ok = True
+    except Exception:
+        _schema_v2_ok = False
+    return _schema_v2_ok
+
 # ── КБЖУ targets — configured via NUTRITION_* env vars (see .env.example)
 # Defaults: Mifflin-St Jeor 80kg/175cm/30y/male, PAL 1.4, deficit ~500 kcal
 _DEFAULT_KCAL = 2000
@@ -202,38 +218,47 @@ class NutritionService:
 
     def _delete_meal(self, meal_id: str, user_id: int, reason: str = "") -> bool:
         db = self._get_db()
-        result = (
-            db.table("meals")
-            .update({"is_deleted": True, "delete_reason": reason})
-            .eq("id", meal_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
+        if _has_schema_v2(db):
+            result = (
+                db.table("meals")
+                .update({"is_deleted": True, "delete_reason": reason})
+                .eq("id", meal_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+        else:
+            result = db.table("meals").delete().eq("id", meal_id).eq("user_id", user_id).execute()
         return bool(result.data)
 
     def _pop_last_meal(self, user_id: int) -> dict[str, Any] | None:
         db = self._get_db()
-        rows = (
+        q = (
             db.table("meals")
             .select("id,meal_type,description,calories,logged_at")
             .eq("user_id", user_id)
-            .eq("is_deleted", False)
             .order("logged_at", desc=True)
             .limit(1)
-            .execute()
         )
+        if _has_schema_v2(db):
+            q = q.eq("is_deleted", False)
+        rows = q.execute()
         if not rows.data:
             return None
         row = rows.data[0]
-        db.table("meals").update({"is_deleted": True, "delete_reason": "отменено в боте"}).eq("id", row["id"]).execute()
+        if _has_schema_v2(db):
+            db.table("meals").update({"is_deleted": True, "delete_reason": "отменено в боте"}).eq("id", row["id"]).execute()
+        else:
+            db.table("meals").delete().eq("id", row["id"]).execute()
         return row
 
     def _fetch_meal_by_id(self, meal_id: str, user_id: int) -> dict[str, Any] | None:
         db = self._get_db()
+        cols = "id,logged_at,meal_type,description,calories,protein,fat,carbs,fiber,nutritionist_comment,recommendation"
+        if _has_schema_v2(db):
+            cols += ",is_deleted,delete_reason"
         result = (
             db.table("meals")
-            .select("id,logged_at,meal_type,description,calories,protein,fat,carbs,fiber,"
-                    "nutritionist_comment,recommendation,is_deleted,delete_reason")
+            .select(cols)
             .eq("id", meal_id)
             .eq("user_id", user_id)
             .limit(1)
@@ -384,15 +409,16 @@ class NutritionService:
         day_start = datetime(today.year, today.month, today.day, tzinfo=tz).isoformat()
         day_end = (datetime(today.year, today.month, today.day, tzinfo=tz) + timedelta(days=1)).isoformat()
         db = self._get_db()
-        result = (
+        q = (
             db.table("meals")
             .select("calories,protein,fat,carbs,fiber")
             .eq("user_id", user_id)
-            .eq("is_deleted", False)
             .gte("logged_at", day_start)
             .lt("logged_at", day_end)
-            .execute()
         )
+        if _has_schema_v2(db):
+            q = q.eq("is_deleted", False)
+        result = q.execute()
         meals = result.data or []
         totals = {
             "total_calories": sum(m.get("calories", 0) for m in meals),
@@ -455,26 +481,28 @@ class NutritionService:
 
     def _fetch_recent_meals(self, user_id: int, limit: int) -> list[dict[str, Any]]:
         db = self._get_db()
-        result = (
+        q = (
             db.table("meals")
             .select("logged_at,meal_type,description,calories,protein,fat,carbs,nutritionist_comment,recommendation")
             .eq("user_id", user_id)
-            .eq("is_deleted", False)
             .order("logged_at", desc=True)
             .limit(limit)
-            .execute()
         )
-        return result.data or []
+        if _has_schema_v2(db):
+            q = q.eq("is_deleted", False)
+        return q.execute().data or []
 
     def _fetch_meals_by_date(self, user_id: int, target_date: date) -> list[dict[str, Any]]:
         tz = _get_tz()
         day_start = datetime(target_date.year, target_date.month, target_date.day, tzinfo=tz).isoformat()
         day_end = (datetime(target_date.year, target_date.month, target_date.day, tzinfo=tz) + timedelta(days=1)).isoformat()
         db = self._get_db()
+        cols = "id,logged_at,meal_type,description,calories,protein,fat,carbs,fiber,nutritionist_comment,recommendation"
+        if _has_schema_v2(db):
+            cols += ",is_deleted,delete_reason"
         result = (
             db.table("meals")
-            .select("id,logged_at,meal_type,description,calories,protein,fat,carbs,fiber,"
-                    "nutritionist_comment,recommendation,is_deleted,delete_reason")
+            .select(cols)
             .eq("user_id", user_id)
             .gte("logged_at", day_start)
             .lt("logged_at", day_end)
@@ -524,15 +552,24 @@ class NutritionService:
 
     def _ensure_schema_v2(self) -> None:
         """Add is_deleted/delete_reason columns to existing meals table (idempotent)."""
+        global _schema_v2_ok
         db = self._get_db()
+        if _has_schema_v2(db):
+            return  # already exists
         sql = """
         ALTER TABLE meals ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE;
         ALTER TABLE meals ADD COLUMN IF NOT EXISTS delete_reason TEXT;
         """
         try:
             db.rpc("exec_sql", {"sql": sql}).execute()
+            _schema_v2_ok = None  # reset cache so next check re-probes
         except Exception:
-            logger.warning("Could not apply schema v2 via RPC. Apply manually.")
+            logger.warning(
+                "Could not apply schema v2 via RPC. "
+                "Run manually in Supabase SQL Editor:\n"
+                "  ALTER TABLE meals ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE;\n"
+                "  ALTER TABLE meals ADD COLUMN IF NOT EXISTS delete_reason TEXT;"
+            )
 
 
 def get_nutrition_service() -> NutritionService:
