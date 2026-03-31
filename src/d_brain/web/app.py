@@ -1,11 +1,13 @@
 """Web upload portal for large audio files (meeting recordings)."""
 
 import logging
+from datetime import date as date_cls
 from datetime import datetime
 
 import httpx
 from fastapi import FastAPI, File, Form, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel
 
 from d_brain.config import get_settings
 from d_brain.services.corrections import CorrectionsService
@@ -21,6 +23,16 @@ from d_brain.services.transcription import (
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="d-brain", docs_url=None, redoc_url=None)
+
+_schema_v2_applied: bool = False
+
+
+class EditMealBody(BaseModel):
+    instruction: str
+
+
+class DeleteMealBody(BaseModel):
+    reason: str = ""
 
 _UPLOAD_HTML = """<!DOCTYPE html>
 <html lang="ru">
@@ -217,10 +229,16 @@ async def _send_telegram(token: str, user_id: int, text: str) -> None:
 
 # ──────────────────────── Nutrition Dashboard ────────────────────────
 
+def _nutrition_user_id() -> int:
+    settings = get_settings()
+    return settings.allowed_user_ids[0] if settings.allowed_user_ids else 0
+
+
 @app.get("/nutrition", response_class=HTMLResponse)
 async def nutrition_dashboard() -> str:
+    global _schema_v2_applied
     settings = get_settings()
-    user_id = settings.allowed_user_ids[0] if settings.allowed_user_ids else 0
+    user_id = _nutrition_user_id()
 
     if not settings.supabase_url or not settings.supabase_key:
         return HTMLResponse("<h2>Supabase не настроен</h2>", status_code=503)
@@ -228,6 +246,9 @@ async def nutrition_dashboard() -> str:
     try:
         from d_brain.services.nutrition import get_nutrition_service
         svc = get_nutrition_service()
+        if not _schema_v2_applied:
+            await svc.ensure_schema_v2()
+            _schema_v2_applied = True
         today = await svc.get_today_progress(user_id)
         weekly = await svc.get_weekly_data(user_id, days=14)
         recent = await svc.get_recent_meals(user_id, limit=10)
@@ -246,6 +267,57 @@ async def nutrition_dashboard() -> str:
     return html
 
 
+@app.get("/nutrition/meals")
+async def api_meals_by_date(date: str = "") -> JSONResponse:
+    settings = get_settings()
+    if not settings.supabase_url:
+        return JSONResponse({"error": "Supabase not configured"}, status_code=503)
+    try:
+        target = date_cls.fromisoformat(date) if date else date_cls.today()
+    except ValueError:
+        return JSONResponse({"error": "invalid date"}, status_code=400)
+    try:
+        from d_brain.services.nutrition import get_nutrition_service
+        svc = get_nutrition_service()
+        meals = await svc.get_meals_by_date(_nutrition_user_id(), target)
+        return JSONResponse(meals)
+    except Exception as e:
+        logger.exception("api_meals_by_date error")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/nutrition/meals/{meal_id}/edit")
+async def api_edit_meal(meal_id: str, body: EditMealBody) -> JSONResponse:
+    settings = get_settings()
+    if not settings.supabase_url:
+        return JSONResponse({"error": "Supabase not configured"}, status_code=503)
+    try:
+        from d_brain.services.nutrition import get_nutrition_service
+        svc = get_nutrition_service()
+        updated = await svc.edit_meal_via_llm(meal_id, _nutrition_user_id(), body.instruction)
+        if updated is None:
+            return JSONResponse({"error": "meal not found"}, status_code=404)
+        return JSONResponse(updated)
+    except Exception as e:
+        logger.exception("api_edit_meal error")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/nutrition/meals/{meal_id}/delete")
+async def api_delete_meal(meal_id: str, body: DeleteMealBody) -> JSONResponse:
+    settings = get_settings()
+    if not settings.supabase_url:
+        return JSONResponse({"error": "Supabase not configured"}, status_code=503)
+    try:
+        from d_brain.services.nutrition import get_nutrition_service
+        svc = get_nutrition_service()
+        ok = await svc.delete_meal(meal_id, _nutrition_user_id(), body.reason)
+        return JSONResponse({"ok": ok})
+    except Exception as e:
+        logger.exception("api_delete_meal error")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 _NUTRITION_TMPL = r"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -259,7 +331,7 @@ _NUTRITION_TMPL = r"""<!DOCTYPE html>
          background:#0f0f0f;color:#e0e0e0;padding:20px;min-height:100vh}
     a.back{display:inline-block;margin-bottom:20px;color:#6366f1;text-decoration:none;font-size:14px}
     h1{font-size:22px;font-weight:700;margin-bottom:4px}
-    .sub{font-size:13px;color:#666;margin-bottom:24px}
+    .sub{font-size:13px;color:#666;margin-bottom:16px}
     .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:24px}
     .card{background:#1a1a1a;border-radius:14px;padding:20px}
     .card h2{font-size:14px;color:#888;font-weight:500;margin-bottom:14px;text-transform:uppercase;letter-spacing:.5px}
@@ -285,8 +357,45 @@ _NUTRITION_TMPL = r"""<!DOCTYPE html>
     .meal-kcal{color:#6366f1;font-weight:600}
     .meal-desc{color:#888;margin-bottom:4px}
     .meal-comment{color:#555;font-size:11px;font-style:italic}
-    .tip{background:#1a1a2e;border-left:3px solid #6366f1;padding:10px 14px;border-radius:0 8px 8px 0;font-size:13px;color:#aaa;margin-top:16px}
     .over{color:#ef4444 !important}
+    /* ── tabs ── */
+    .tabs{display:flex;gap:8px;margin-bottom:20px}
+    .tab-btn{padding:8px 18px;border-radius:8px;border:none;background:#222;
+             color:#888;font-size:14px;cursor:pointer;transition:all .2s}
+    .tab-btn.active{background:#6366f1;color:#fff}
+    .tab-panel{display:none}.tab-panel.active{display:block}
+    /* ── date nav ── */
+    .date-nav{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+    .date-nav button{background:#222;border:none;color:#aaa;border-radius:6px;
+                     padding:6px 14px;cursor:pointer;font-size:18px;line-height:1}
+    .date-nav button:hover{background:#333}
+    .date-nav .date-label{font-size:15px;font-weight:600;min-width:160px;text-align:center;color:#e0e0e0}
+    /* ── meal record cards ── */
+    .meal-record{background:#222;border-radius:12px;padding:14px;margin-bottom:10px}
+    .meal-record.deleted{opacity:.4}
+    .mr-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px}
+    .mr-title{font-weight:600;color:#e0e0e0}
+    .mr-kcal{color:#6366f1;font-weight:600;font-size:13px}
+    .mr-desc{font-size:13px;color:#999;margin-bottom:4px}
+    .mr-kbzhu{font-size:12px;color:#666;margin-bottom:4px}
+    .mr-comment{font-size:11px;color:#555;font-style:italic;margin-bottom:8px}
+    .mr-del-label{font-size:11px;color:#555;margin-top:4px}
+    .mr-actions{display:flex;gap:8px;margin-top:8px}
+    .mr-btn{background:#2a2a2a;border:1px solid #333;color:#aaa;border-radius:6px;
+            padding:4px 10px;font-size:12px;cursor:pointer}
+    .mr-btn:hover{border-color:#555;color:#e0e0e0}
+    .mr-form{margin-top:10px;display:none}
+    .mr-form.open{display:block}
+    .mr-textarea{width:100%;background:#1a1a1a;border:1px solid #333;border-radius:6px;
+                 color:#e0e0e0;padding:8px;font-size:13px;resize:vertical;min-height:48px}
+    .mr-textarea:focus{outline:none;border-color:#6366f1}
+    .mr-submit{background:#6366f1;border:none;color:#fff;border-radius:6px;
+               padding:6px 14px;font-size:13px;cursor:pointer;margin-top:6px}
+    .mr-submit:disabled{background:#333;color:#666;cursor:not-allowed}
+    .mr-del-submit{background:#ef4444;border:none;color:#fff;border-radius:6px;
+                   padding:6px 14px;font-size:13px;cursor:pointer;margin-top:6px}
+    .del-strikethrough{text-decoration:line-through;color:#555}
+    .rec-empty{color:#555;padding:20px 0;text-align:center;font-size:13px}
   </style>
 </head>
 <body>
@@ -294,24 +403,40 @@ _NUTRITION_TMPL = r"""<!DOCTYPE html>
   <h1>🥗 Питание</h1>
   <p class="sub" id="dateStr"></p>
 
-  <div class="grid">
-    <!-- Today macros -->
-    <div class="card" id="todayCard">
-      <h2>Сегодня</h2>
-      <div id="barsWrap"></div>
-      <div class="macros" id="macrosGrid"></div>
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('svod')">📊 Сводка</button>
+    <button class="tab-btn" onclick="switchTab('records')">📋 Записи</button>
+  </div>
+
+  <!-- ── Tab: Сводка ── -->
+  <div id="tab-svod" class="tab-panel active">
+    <div class="grid">
+      <div class="card" id="todayCard">
+        <h2>Сегодня</h2>
+        <div id="barsWrap"></div>
+        <div class="macros" id="macrosGrid"></div>
+      </div>
+      <div class="card">
+        <h2>Калории за 14 дней</h2>
+        <div class="chart-wrap"><canvas id="kcalChart"></canvas></div>
+      </div>
     </div>
-    <!-- Weekly chart -->
     <div class="card">
-      <h2>Калории за 14 дней</h2>
-      <div class="chart-wrap"><canvas id="kcalChart"></canvas></div>
+      <h2>Последние приёмы пищи</h2>
+      <ul class="meals-list" id="mealsList"></ul>
     </div>
   </div>
 
-  <!-- Recent meals -->
-  <div class="card">
-    <h2>Последние приёмы пищи</h2>
-    <ul class="meals-list" id="mealsList"></ul>
+  <!-- ── Tab: Записи ── -->
+  <div id="tab-records" class="tab-panel">
+    <div class="card">
+      <div class="date-nav">
+        <button onclick="shiftDay(-1)">&#8592;</button>
+        <span class="date-label" id="recDateLabel"></span>
+        <button onclick="shiftDay(1)">&#8594;</button>
+      </div>
+      <div id="recordsList"></div>
+    </div>
   </div>
 
 <script>
@@ -325,17 +450,24 @@ const MEAL_EMOJI = {завтрак:"🌅",обед:"☀️",ужин:"🌙",пе
 document.getElementById("dateStr").textContent =
   new Date().toLocaleDateString("ru-RU",{weekday:"long",day:"numeric",month:"long"});
 
+// ── tabs ──
+function switchTab(name) {
+  document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+  document.getElementById("tab-" + name).classList.add("active");
+  event.currentTarget.classList.add("active");
+  if (name === "records") loadRecords();
+}
+
 // ── progress bars ──
 function bar(id, label, val, goal, cls) {
   const pct = goal > 0 ? Math.min(Math.round(val/goal*100), 100) : 0;
   const over = val > goal;
-  return `<div class="bar-wrap">
-    <div class="bar-label">
-      <span>${label}</span>
-      <span class="${over?"over":""}">${val} / ${goal}</span>
-    </div>
-    <div class="bar-bg"><div class="bar-fill ${cls}" style="width:${pct}%"></div></div>
-  </div>`;
+  return '<div class="bar-wrap">'
+    + '<div class="bar-label"><span>' + label + '</span>'
+    + '<span class="' + (over?"over":"") + '">' + val + ' / ' + goal + '</span></div>'
+    + '<div class="bar-bg"><div class="bar-fill ' + cls + '" style="width:' + pct + '%"></div></div>'
+    + '</div>';
 }
 document.getElementById("barsWrap").innerHTML =
   bar("k","Калории ккал", TODAY.total_calories||0, TODAY.goal_calories||2000, "bar-kcal") +
@@ -346,11 +478,11 @@ document.getElementById("barsWrap").innerHTML =
 // ── macro tiles ──
 function tile(val, lbl, goal, color) {
   const pct = goal>0?Math.round(val/goal*100):0;
-  return `<div class="macro">
-    <div class="val" style="color:${color}">${val}</div>
-    <div class="lbl">${lbl}</div>
-    <div class="pct">${pct}% от нормы</div>
-  </div>`;
+  return '<div class="macro">'
+    + '<div class="val" style="color:' + color + '">' + val + '</div>'
+    + '<div class="lbl">' + lbl + '</div>'
+    + '<div class="pct">' + pct + '% от нормы</div>'
+    + '</div>';
 }
 document.getElementById("macrosGrid").innerHTML =
   tile(TODAY.total_calories||0, "ккал", TODAY.goal_calories||2000, "#6366f1") +
@@ -390,7 +522,7 @@ if (WEEKLY.length > 0) {
   });
 }
 
-// ── recent meals ──
+// ── recent meals (Сводка tab) ──
 const list = document.getElementById("mealsList");
 if (RECENT.length === 0) {
   list.innerHTML = "<li style='color:#555;padding:16px 0'>Приёмов пищи пока нет</li>";
@@ -399,16 +531,156 @@ if (RECENT.length === 0) {
     const dt = new Date(m.logged_at);
     const time = dt.toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"});
     const emoji = MEAL_EMOJI[m.meal_type] || "🍽";
-    return `<li>
-      <div class="meal-head">
-        <span class="meal-type">${emoji} ${m.meal_type||"приём"} · ${time}</span>
-        <span class="meal-kcal">${m.calories||0} ккал</span>
-      </div>
-      <div class="meal-desc">${m.description||""}</div>
-      ${m.nutritionist_comment
-        ? `<div class="meal-comment">${m.nutritionist_comment}</div>` : ""}
-    </li>`;
+    return "<li>"
+      + '<div class="meal-head">'
+      + '<span class="meal-type">' + emoji + " " + (m.meal_type||"приём") + " · " + time + "</span>"
+      + '<span class="meal-kcal">' + (m.calories||0) + " ккал</span>"
+      + "</div>"
+      + '<div class="meal-desc">' + (m.description||"") + "</div>"
+      + (m.nutritionist_comment ? '<div class="meal-comment">' + m.nutritionist_comment + "</div>" : "")
+      + "</li>";
   }).join("");
+}
+
+// ── Records tab ──
+let recDate = new Date();
+recDate.setHours(0,0,0,0);
+
+function isoDate(d) {
+  return d.getFullYear() + "-" +
+    String(d.getMonth()+1).padStart(2,"0") + "-" +
+    String(d.getDate()).padStart(2,"0");
+}
+
+function fmtDateLabel(d) {
+  return d.toLocaleDateString("ru-RU",{weekday:"short",day:"numeric",month:"long"});
+}
+
+function shiftDay(delta) {
+  recDate.setDate(recDate.getDate() + delta);
+  loadRecords();
+}
+
+async function loadRecords() {
+  document.getElementById("recDateLabel").textContent = fmtDateLabel(recDate);
+  document.getElementById("recordsList").innerHTML =
+    '<div class="rec-empty">Загрузка...</div>';
+  try {
+    const r = await fetch("/nutrition/meals?date=" + isoDate(recDate));
+    const meals = await r.json();
+    if (Array.isArray(meals)) {
+      renderRecords(meals);
+    } else {
+      document.getElementById("recordsList").innerHTML =
+        '<div class="rec-empty" style="color:#ef4444">Ошибка: ' + (meals.error||"unknown") + "</div>";
+    }
+  } catch(e) {
+    document.getElementById("recordsList").innerHTML =
+      '<div class="rec-empty" style="color:#ef4444">Ошибка: ' + e.message + "</div>";
+  }
+}
+
+function renderRecords(meals) {
+  const el = document.getElementById("recordsList");
+  if (!meals.length) {
+    el.innerHTML = '<div class="rec-empty">Нет записей за этот день</div>';
+    return;
+  }
+  const active = meals.filter(m => !m.is_deleted);
+  const deleted = meals.filter(m => m.is_deleted);
+  el.innerHTML = active.concat(deleted).map(m => mealCard(m)).join("");
+}
+
+function mealCard(m) {
+  const dt = new Date(m.logged_at);
+  const time = dt.toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"});
+  const emoji = MEAL_EMOJI[m.meal_type] || "🍽";
+  const kbzhu = (m.calories||0) + " ккал · Б:" + (m.protein||0) + " Ж:" + (m.fat||0) + " У:" + (m.carbs||0);
+  if (m.is_deleted) {
+    return '<div class="meal-record deleted" id="mr-' + m.id + '">'
+      + '<div class="mr-head">'
+      + '<span class="mr-title del-strikethrough">' + emoji + " " + (m.meal_type||"приём") + " · " + time + "</span>"
+      + '<span class="mr-kcal">' + (m.calories||0) + " ккал</span>"
+      + "</div>"
+      + '<div class="mr-desc del-strikethrough">' + (m.description||"") + "</div>"
+      + '<div class="mr-del-label">🗑 ' + (m.delete_reason||"удалено") + "</div>"
+      + "</div>";
+  }
+  return '<div class="meal-record" id="mr-' + m.id + '">'
+    + '<div class="mr-head">'
+    + '<span class="mr-title">' + emoji + " " + (m.meal_type||"приём") + " · " + time + "</span>"
+    + '<span class="mr-kcal">' + (m.calories||0) + " ккал</span>"
+    + "</div>"
+    + '<div class="mr-desc">' + (m.description||"") + "</div>"
+    + '<div class="mr-kbzhu">' + kbzhu + "</div>"
+    + (m.nutritionist_comment ? '<div class="mr-comment">' + m.nutritionist_comment + "</div>" : "")
+    + '<div class="mr-actions">'
+    + '<button class="mr-btn" onclick="toggleEdit(\'' + m.id + '\')">✏️ Изменить</button>'
+    + '<button class="mr-btn" onclick="toggleDel(\'' + m.id + '\')">🗑 Удалить</button>'
+    + "</div>"
+    + '<div class="mr-form" id="edit-' + m.id + '">'
+    + '<textarea class="mr-textarea" id="edit-txt-' + m.id + '" placeholder="добавь 15г сахара"></textarea>'
+    + '<button class="mr-submit" id="edit-btn-' + m.id + '" onclick="applyEdit(\'' + m.id + '\')">Применить</button>'
+    + "</div>"
+    + '<div class="mr-form" id="del-' + m.id + '">'
+    + '<textarea class="mr-textarea" id="del-txt-' + m.id + '" placeholder="Причина (напр: дубль)"></textarea>'
+    + '<button class="mr-del-submit" id="del-btn-' + m.id + '" onclick="applyDel(\'' + m.id + '\')">Удалить</button>'
+    + "</div>"
+    + "</div>";
+}
+
+function toggleEdit(id) {
+  var ef = document.getElementById("edit-" + id);
+  var df = document.getElementById("del-" + id);
+  df.classList.remove("open");
+  ef.classList.toggle("open");
+}
+
+function toggleDel(id) {
+  var df = document.getElementById("del-" + id);
+  var ef = document.getElementById("edit-" + id);
+  ef.classList.remove("open");
+  df.classList.toggle("open");
+}
+
+async function applyEdit(id) {
+  var instruction = document.getElementById("edit-txt-" + id).value.trim();
+  if (!instruction) return;
+  var btn = document.getElementById("edit-btn-" + id);
+  btn.disabled = true;
+  btn.textContent = "Обрабатывается…";
+  try {
+    var r = await fetch("/nutrition/meals/" + id + "/edit", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({instruction: instruction})
+    });
+    var data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    loadRecords();
+  } catch(e) {
+    btn.textContent = "Ошибка: " + e.message;
+    btn.disabled = false;
+  }
+}
+
+async function applyDel(id) {
+  var reason = document.getElementById("del-txt-" + id).value.trim();
+  var btn = document.getElementById("del-btn-" + id);
+  btn.disabled = true;
+  try {
+    var r = await fetch("/nutrition/meals/" + id + "/delete", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({reason: reason})
+    });
+    var data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    loadRecords();
+  } catch(e) {
+    btn.textContent = "Ошибка";
+    btn.disabled = false;
+  }
 }
 </script>
 </body></html>"""

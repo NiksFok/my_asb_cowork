@@ -8,8 +8,9 @@ import logging
 import os
 import tempfile
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,11 @@ class MealAnalysis:
     comment: str
     recommendation: str
     meal_id: str = ""
+
+
+def _get_tz() -> ZoneInfo:
+    from d_brain.config import get_settings
+    return ZoneInfo(get_settings().location_tz)
 
 
 class NutritionService:
@@ -147,30 +153,62 @@ class NutritionService:
         return await asyncio.to_thread(self._fetch_weekly, user_id, days)
 
     async def get_recent_meals(self, user_id: int, limit: int = 5) -> list[dict[str, Any]]:
-        """Return the last N meal records."""
+        """Return the last N meal records (active only)."""
         return await asyncio.to_thread(self._fetch_recent_meals, user_id, limit)
+
+    async def get_meals_by_date(self, user_id: int, target_date: date) -> list[dict[str, Any]]:
+        """Return all meals (including soft-deleted) for a specific date."""
+        return await asyncio.to_thread(self._fetch_meals_by_date, user_id, target_date)
 
     async def ensure_tables(self) -> None:
         """Create Supabase tables if they don't exist yet (idempotent)."""
         await asyncio.to_thread(self._create_tables)
 
-    async def delete_meal(self, meal_id: str, user_id: int) -> bool:
-        """Delete a meal by ID (only if it belongs to user_id). Returns True if deleted."""
-        deleted = await asyncio.to_thread(self._delete_meal, meal_id, user_id)
+    async def ensure_schema_v2(self) -> None:
+        """Add is_deleted / delete_reason columns if they don't exist yet."""
+        await asyncio.to_thread(self._ensure_schema_v2)
+
+    async def delete_meal(self, meal_id: str, user_id: int, reason: str = "") -> bool:
+        """Soft-delete a meal (only if it belongs to user_id). Returns True if updated."""
+        deleted = await asyncio.to_thread(self._delete_meal, meal_id, user_id, reason)
         if deleted:
             await asyncio.to_thread(self._update_daily_summary, user_id, date.today())
         return deleted
 
     async def delete_last_meal(self, user_id: int) -> dict[str, Any] | None:
-        """Delete the most recent meal for this user. Returns deleted row or None."""
+        """Soft-delete the most recent active meal. Returns the meal row or None."""
         result = await asyncio.to_thread(self._pop_last_meal, user_id)
         if result:
             await asyncio.to_thread(self._update_daily_summary, user_id, date.today())
         return result
 
-    def _delete_meal(self, meal_id: str, user_id: int) -> bool:
+    async def edit_meal_via_llm(
+        self, meal_id: str, user_id: int, instruction: str
+    ) -> dict[str, Any] | None:
+        """Edit a meal's КБЖУ via LLM instruction. Returns updated meal row or None."""
+        meal = await asyncio.to_thread(self._fetch_meal_by_id, meal_id, user_id)
+        if not meal:
+            return None
+        updated_fields = await self._apply_llm_edit(meal, instruction)
+        await asyncio.to_thread(self._persist_meal_edit, meal_id, updated_fields)
+        try:
+            meal_date = datetime.fromisoformat(meal["logged_at"]).date()
+        except Exception:
+            meal_date = date.today()
+        await asyncio.to_thread(self._update_daily_summary, user_id, meal_date)
+        return await asyncio.to_thread(self._fetch_meal_by_id, meal_id, user_id)
+
+    # ─────────────────────────── delete / edit internals ───────────────────────────
+
+    def _delete_meal(self, meal_id: str, user_id: int, reason: str = "") -> bool:
         db = self._get_db()
-        result = db.table("meals").delete().eq("id", meal_id).eq("user_id", user_id).execute()
+        result = (
+            db.table("meals")
+            .update({"is_deleted": True, "delete_reason": reason})
+            .eq("id", meal_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
         return bool(result.data)
 
     def _pop_last_meal(self, user_id: int) -> dict[str, Any] | None:
@@ -179,6 +217,7 @@ class NutritionService:
             db.table("meals")
             .select("id,meal_type,description,calories,logged_at")
             .eq("user_id", user_id)
+            .eq("is_deleted", False)
             .order("logged_at", desc=True)
             .limit(1)
             .execute()
@@ -186,10 +225,59 @@ class NutritionService:
         if not rows.data:
             return None
         row = rows.data[0]
-        db.table("meals").delete().eq("id", row["id"]).execute()
+        db.table("meals").update({"is_deleted": True, "delete_reason": "отменено в боте"}).eq("id", row["id"]).execute()
         return row
 
-    # ─────────────────────────── Claude call ───────────────────────────
+    def _fetch_meal_by_id(self, meal_id: str, user_id: int) -> dict[str, Any] | None:
+        db = self._get_db()
+        result = (
+            db.table("meals")
+            .select("id,logged_at,meal_type,description,calories,protein,fat,carbs,fiber,"
+                    "nutritionist_comment,recommendation,is_deleted,delete_reason")
+            .eq("id", meal_id)
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+
+    async def _apply_llm_edit(self, meal: dict[str, Any], instruction: str) -> dict[str, Any]:
+        prompt = (
+            f"Текущая запись: {meal.get('description', '')}, "
+            f"{meal.get('calories', 0)} ккал, "
+            f"Б:{meal.get('protein', 0)} Ж:{meal.get('fat', 0)} У:{meal.get('carbs', 0)}.\n"
+            f"Инструкция пользователя: {instruction}.\n"
+            "Верни ТОЛЬКО JSON с обновлёнными полями: "
+            '{"description": "...", "calories": 0, "protein": 0.0, "fat": 0.0, "carbs": 0.0, "fiber": 0.0}'
+        )
+        proc = await asyncio.create_subprocess_exec(
+            "claude", "--print",
+            "--model", "claude-opus-4-6",
+            "--dangerously-skip-permissions",
+            "--system-prompt", self._system_prompt,
+            "-p", prompt,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        if proc.returncode != 0:
+            raise RuntimeError(f"claude CLI edit failed: {stderr.decode(errors='replace')[:200]}")
+        raw = stdout.decode().strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        return json.loads(raw)
+
+    def _persist_meal_edit(self, meal_id: str, fields: dict[str, Any]) -> None:
+        allowed = {"description", "calories", "protein", "fat", "carbs", "fiber"}
+        patch = {k: v for k, v in fields.items() if k in allowed}
+        if not patch:
+            return
+        db = self._get_db()
+        db.table("meals").update(patch).eq("id", meal_id).execute()
+
+    # ─────────────────────────── Claude call (meal analysis) ───────────────────────────
 
     async def _call_claude(
         self,
@@ -273,7 +361,7 @@ class NutritionService:
         db = self._get_db()
         row = {
             "user_id": user_id,
-            "logged_at": datetime.utcnow().isoformat(),
+            "logged_at": datetime.now().astimezone().isoformat(),
             "meal_type": analysis.meal_type,
             "description": analysis.description,
             "calories": analysis.calories,
@@ -292,13 +380,17 @@ class NutritionService:
         return str(rows[0]["id"]) if rows else ""
 
     def _update_daily_summary(self, user_id: int, today: date) -> None:
+        tz = _get_tz()
+        day_start = datetime(today.year, today.month, today.day, tzinfo=tz).isoformat()
+        day_end = (datetime(today.year, today.month, today.day, tzinfo=tz) + timedelta(days=1)).isoformat()
         db = self._get_db()
         result = (
             db.table("meals")
             .select("calories,protein,fat,carbs,fiber")
             .eq("user_id", user_id)
-            .gte("logged_at", today.isoformat())
-            .lt("logged_at", f"{today.year}-{today.month:02d}-{today.day + 1:02d}")
+            .eq("is_deleted", False)
+            .gte("logged_at", day_start)
+            .lt("logged_at", day_end)
             .execute()
         )
         meals = result.data or []
@@ -322,7 +414,7 @@ class NutritionService:
         db = self._get_db()
         db.table("weight_log").insert({
             "user_id": user_id,
-            "logged_at": datetime.utcnow().isoformat(),
+            "logged_at": datetime.now().astimezone().isoformat(),
             "weight_kg": weight_kg,
             "note": note,
         }).execute()
@@ -349,7 +441,6 @@ class NutritionService:
         }
 
     def _fetch_weekly(self, user_id: int, days: int) -> list[dict[str, Any]]:
-        from datetime import timedelta
         db = self._get_db()
         since = (date.today() - timedelta(days=days - 1)).isoformat()
         result = (
@@ -368,8 +459,26 @@ class NutritionService:
             db.table("meals")
             .select("logged_at,meal_type,description,calories,protein,fat,carbs,nutritionist_comment,recommendation")
             .eq("user_id", user_id)
+            .eq("is_deleted", False)
             .order("logged_at", desc=True)
             .limit(limit)
+            .execute()
+        )
+        return result.data or []
+
+    def _fetch_meals_by_date(self, user_id: int, target_date: date) -> list[dict[str, Any]]:
+        tz = _get_tz()
+        day_start = datetime(target_date.year, target_date.month, target_date.day, tzinfo=tz).isoformat()
+        day_end = (datetime(target_date.year, target_date.month, target_date.day, tzinfo=tz) + timedelta(days=1)).isoformat()
+        db = self._get_db()
+        result = (
+            db.table("meals")
+            .select("id,logged_at,meal_type,description,calories,protein,fat,carbs,fiber,"
+                    "nutritionist_comment,recommendation,is_deleted,delete_reason")
+            .eq("user_id", user_id)
+            .gte("logged_at", day_start)
+            .lt("logged_at", day_end)
+            .order("logged_at", desc=False)
             .execute()
         )
         return result.data or []
@@ -389,7 +498,8 @@ class NutritionService:
             fat NUMERIC(6,1) DEFAULT 0, carbs NUMERIC(6,1) DEFAULT 0,
             fiber NUMERIC(6,1) DEFAULT 0, nutritionist_comment TEXT,
             recommendation TEXT, raw_input TEXT,
-            oura_steps_day INTEGER DEFAULT 0, oura_active_calories_day INTEGER DEFAULT 0
+            oura_steps_day INTEGER DEFAULT 0, oura_active_calories_day INTEGER DEFAULT 0,
+            is_deleted BOOLEAN DEFAULT FALSE, delete_reason TEXT
         );
         CREATE TABLE IF NOT EXISTS daily_summary (
             id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -411,6 +521,18 @@ class NutritionService:
             db.rpc("exec_sql", {"sql": sql}).execute()
         except Exception:
             logger.warning("Could not auto-create tables via RPC. Create them manually.")
+
+    def _ensure_schema_v2(self) -> None:
+        """Add is_deleted/delete_reason columns to existing meals table (idempotent)."""
+        db = self._get_db()
+        sql = """
+        ALTER TABLE meals ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE;
+        ALTER TABLE meals ADD COLUMN IF NOT EXISTS delete_reason TEXT;
+        """
+        try:
+            db.rpc("exec_sql", {"sql": sql}).execute()
+        except Exception:
+            logger.warning("Could not apply schema v2 via RPC. Apply manually.")
 
 
 def get_nutrition_service() -> NutritionService:
