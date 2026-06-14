@@ -4,11 +4,25 @@ import sys, json, re
 
 text = sys.stdin.read()
 
+
+def _loads(s):
+    """Parse JSON from a tmux-captured candidate.
+
+    The fixed-width pane soft-wraps long lines, and capture can drop raw C0
+    control characters (a bare newline at a wrap point) inside JSON string
+    values, which json.loads rejects as 'Invalid control character'. Strip C0
+    controls first: as JSON they are only valid as inter-token whitespace,
+    which the parser ignores anyway, so removing them never changes a valid
+    document but rescues a wrap-mangled one.
+    """
+    return json.loads(re.sub(r'[\x00-\x1f]', '', s))
+
+
 # Strategy 1: code fence extraction (```json ... ```)
 match = re.search(r'`{3}(?:json)?\s*(\{[\s\S]*?\})\s*`{3}', text)
 if match:
     try:
-        data = json.loads(match.group(1))
+        data = _loads(match.group(1))
         json.dump(data, sys.stdout, ensure_ascii=False, indent=2)
         sys.exit(0)
     except json.JSONDecodeError:
@@ -19,7 +33,7 @@ first = text.find('{')
 last = text.rfind('}')
 if first != -1 and last > first:
     try:
-        data = json.loads(text[first:last+1])
+        data = _loads(text[first:last+1])
         json.dump(data, sys.stdout, ensure_ascii=False, indent=2)
         sys.exit(0)
     except json.JSONDecodeError:
@@ -30,7 +44,7 @@ for line in text.split('\n'):
     line = line.strip()
     if line.startswith('{') and line.endswith('}'):
         try:
-            data = json.loads(line)
+            data = _loads(line)
             json.dump(data, sys.stdout, ensure_ascii=False, indent=2)
             sys.exit(0)
         except json.JSONDecodeError:

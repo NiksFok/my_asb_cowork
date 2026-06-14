@@ -1,11 +1,16 @@
-"""Claude processing service."""
+"""Claude processing service.
+
+ASB v3.0 billing migration: every model turn now goes through the shared
+persistent interactive tmux session (``ClaudeSession.ask``) instead of a
+headless ``claude --print`` subprocess — interactive usage stays on the
+subscription. The public return shape ``{report|error, processed_entries}`` is
+preserved so the calling handlers (do/edit/fix/process/weekly) need no change.
+"""
 
 import logging
-import os
-import subprocess
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from d_brain.services.session import SessionStore
 
@@ -13,14 +18,66 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 1200  # 20 minutes
 
+# Human-readable Russian status when the session can't answer.
+_STATUS_MESSAGES = {
+    "rate_limited": "Достигнут лимит подписки Claude — попробуй позже.",
+    "logged_out": "Claude Code разлогинен на сервере — нужно заново войти (claude login).",
+    "timeout": "Claude не ответил вовремя (таймаут).",
+    "error": "Ошибка сессии Claude.",
+}
+
 
 class ClaudeProcessor:
-    """Service for triggering Claude Code processing."""
+    """Service for triggering Claude Code processing via the shared session."""
 
-    def __init__(self, vault_path: Path, todoist_api_key: str = "") -> None:
+    def __init__(
+        self,
+        vault_path: Path,
+        todoist_api_key: str = "",
+        *,
+        session: Any = None,
+    ) -> None:
         self.vault_path = Path(vault_path)
         self.todoist_api_key = todoist_api_key
         self._mcp_config_path = (self.vault_path.parent / "mcp-config.json").resolve()
+        # May be None when constructed via the legacy positional ctor
+        # (ClaudeProcessor(vault, key)); resolved lazily in _ask().
+        self._session = session
+
+    def _get_session(self) -> Any:
+        if self._session is None:
+            from d_brain.config import get_settings
+            from d_brain.services.runtime import get_session
+
+            self._session = get_session(get_settings())
+        return self._session
+
+    def _ask(
+        self,
+        prompt: str,
+        *,
+        wrap: bool = True,
+        request_id: Optional[str] = None,
+        timeout: float = DEFAULT_TIMEOUT,
+    ) -> dict[str, Any]:
+        """Send a prompt to the persistent session; map AskResult → report dict."""
+        try:
+            session = self._get_session()
+            res = session.ask(
+                prompt, timeout=timeout, request_id=request_id, wrap=wrap
+            )
+        except Exception as e:  # noqa: BLE001 — must never crash the caller
+            logger.exception("session ask failed")
+            return {"error": str(e), "processed_entries": 0}
+
+        if res.ok:
+            return {
+                "report": self._clean_output(res.reply or ""),
+                "processed_entries": 1,
+            }
+        logger.error("session ask non-ok: %s %s", res.status, res.detail)
+        msg = _STATUS_MESSAGES.get(res.status, res.detail or "Ошибка обработки")
+        return {"error": msg, "processed_entries": 0}
 
     def _load_skill_content(self) -> str:
         """Load dbrain-processor skill content for inclusion in prompt.
@@ -223,63 +280,7 @@ CRITICAL OUTPUT FORMAT:
 - Allowed tags: <b>, <i>, <code>, <s>, <u>
 - If entries already processed, return status report in same HTML format"""
 
-        try:
-            # Pass TODOIST_API_KEY to Claude subprocess
-            env = os.environ.copy()
-            if self.todoist_api_key:
-                env["TODOIST_API_KEY"] = self.todoist_api_key
-
-            result = subprocess.run(
-                [
-                    "claude",
-                    "--print",
-                    "--model", "claude-sonnet-4-6",
-                    "--dangerously-skip-permissions",
-                    "--mcp-config",
-                    str(self._mcp_config_path),
-                    "-p",
-                    prompt,
-                ],
-                cwd=self.vault_path.parent,
-                capture_output=True,
-                text=True,
-                timeout=DEFAULT_TIMEOUT,
-                check=False,
-                env=env,
-            )
-
-            if result.returncode != 0:
-                logger.error("Claude processing failed: %s", result.stderr)
-                return {
-                    "error": result.stderr or "Claude processing failed",
-                    "processed_entries": 0,
-                }
-
-            # Return human-readable output
-            output = self._clean_output(result.stdout)
-            return {
-                "report": output,
-                "processed_entries": 1,  # успешно обработано
-            }
-
-        except subprocess.TimeoutExpired:
-            logger.error("Claude processing timed out")
-            return {
-                "error": "Processing timed out",
-                "processed_entries": 0,
-            }
-        except FileNotFoundError:
-            logger.error("Claude CLI not found")
-            return {
-                "error": "Claude CLI not installed",
-                "processed_entries": 0,
-            }
-        except Exception as e:
-            logger.exception("Unexpected error during processing")
-            return {
-                "error": str(e),
-                "processed_entries": 0,
-            }
+        return self._ask(prompt, wrap=True, request_id=f"maint-daily-{day.isoformat()}")
 
     def execute_prompt(self, user_prompt: str, user_id: int = 0) -> dict[str, Any]:
         """Execute arbitrary prompt with Claude.
@@ -329,51 +330,9 @@ EXECUTION:
 2. Call MCP tools directly (mcp__todoist__*, read/write files)
 3. Return HTML status report with results"""
 
-        try:
-            env = os.environ.copy()
-            if self.todoist_api_key:
-                env["TODOIST_API_KEY"] = self.todoist_api_key
-
-            result = subprocess.run(
-                [
-                    "claude",
-                    "--print",
-                    "--model", "claude-sonnet-4-6",
-                    "--dangerously-skip-permissions",
-                    "--mcp-config",
-                    str(self._mcp_config_path),
-                    "-p",
-                    prompt,
-                ],
-                cwd=self.vault_path.parent,
-                capture_output=True,
-                text=True,
-                timeout=DEFAULT_TIMEOUT,
-                check=False,
-                env=env,
-            )
-
-            if result.returncode != 0:
-                logger.error("Claude execution failed: %s", result.stderr)
-                return {
-                    "error": result.stderr or "Claude execution failed",
-                    "processed_entries": 0,
-                }
-
-            return {
-                "report": self._clean_output(result.stdout),
-                "processed_entries": 1,
-            }
-
-        except subprocess.TimeoutExpired:
-            logger.error("Claude execution timed out")
-            return {"error": "Execution timed out", "processed_entries": 0}
-        except FileNotFoundError:
-            logger.error("Claude CLI not found")
-            return {"error": "Claude CLI not installed", "processed_entries": 0}
-        except Exception as e:
-            logger.exception("Unexpected error during execution")
-            return {"error": str(e), "processed_entries": 0}
+        # Live user request (/do) — NOT a maintenance turn, so it is a valid
+        # steering target if the user sends a follow-up mid-answer.
+        return self._ask(prompt, wrap=True, request_id=f"do-{user_id or 'anon'}")
 
     def generate_weekly(self) -> dict[str, Any]:
         """Generate weekly digest with Claude.
@@ -406,57 +365,12 @@ CRITICAL OUTPUT FORMAT:
 - Allowed tags: <b>, <i>, <code>, <s>, <u>
 - Be concise - Telegram has 4096 char limit"""
 
-        try:
-            env = os.environ.copy()
-            if self.todoist_api_key:
-                env["TODOIST_API_KEY"] = self.todoist_api_key
-
-            result = subprocess.run(
-                [
-                    "claude",
-                    "--print",
-                    "--model", "claude-sonnet-4-6",
-                    "--dangerously-skip-permissions",
-                    "--mcp-config",
-                    str(self._mcp_config_path),
-                    "-p",
-                    prompt,
-                ],
-                cwd=self.vault_path.parent,
-                capture_output=True,
-                text=True,
-                timeout=DEFAULT_TIMEOUT,
-                check=False,
-                env=env,
-            )
-
-            if result.returncode != 0:
-                logger.error("Weekly digest failed: %s", result.stderr)
-                return {
-                    "error": result.stderr or "Weekly digest failed",
-                    "processed_entries": 0,
-                }
-
-            output = self._clean_output(result.stdout)
-
+        result = self._ask(prompt, wrap=True, request_id="maint-weekly")
+        if result.get("report"):
             # Save to summaries/ and update MOC
             try:
-                summary_path = self._save_weekly_summary(output, today)
+                summary_path = self._save_weekly_summary(result["report"], today)
                 self._update_weekly_moc(summary_path)
             except Exception as e:
                 logger.warning("Failed to save weekly summary: %s", e)
-
-            return {
-                "report": output,
-                "processed_entries": 1,
-            }
-
-        except subprocess.TimeoutExpired:
-            logger.error("Weekly digest timed out")
-            return {"error": "Weekly digest timed out", "processed_entries": 0}
-        except FileNotFoundError:
-            logger.error("Claude CLI not found")
-            return {"error": "Claude CLI not installed", "processed_entries": 0}
-        except Exception as e:
-            logger.exception("Unexpected error during weekly digest")
-            return {"error": str(e), "processed_entries": 0}
+        return result

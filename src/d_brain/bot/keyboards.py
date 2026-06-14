@@ -24,10 +24,8 @@ def get_main_keyboard(settings: Settings | None = None) -> ReplyKeyboardMarkup:
     builder.button(text="📅 Неделя")
     builder.button(text="⚙️ Настройки")
 
-    # Row 2: Еда (if nutrition enabled) + Правки + optional onboarding/improve buttons
+    # Row 2: Правки + optional onboarding/improve buttons
     row2 = []
-    if settings.nutrition_enabled:
-        row2.append("🍽 Еда")
     row2.append("✏️ Правки")
     if settings.first_seen:
         try:
@@ -46,21 +44,20 @@ def get_main_keyboard(settings: Settings | None = None) -> ReplyKeyboardMarkup:
     return builder.as_markup(resize_keyboard=True, is_persistent=True)
 
 
-def get_food_keyboard() -> ReplyKeyboardMarkup:
-    """Keyboard shown during food logging session."""
-    builder = ReplyKeyboardBuilder()
-    builder.button(text="✅ Записал всё")
-    builder.button(text="❌ Отмена")
-    builder.adjust(2)
-    return builder.as_markup(resize_keyboard=True, is_persistent=True)
-
-
 def get_session_keyboard() -> ReplyKeyboardMarkup:
     """Keyboard shown during an active Claude session."""
     builder = ReplyKeyboardBuilder()
     builder.button(text="📋 Журнал")
     builder.button(text="🛑 Завершить сессию")
     builder.adjust(2)
+    return builder.as_markup(resize_keyboard=True, is_persistent=True)
+
+
+def get_conversation_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard shown while a /do conversation is open (follow-ups continue it)."""
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="🛑 Завершить")
+    builder.adjust(1)
     return builder.as_markup(resize_keyboard=True, is_persistent=True)
 
 
@@ -101,28 +98,18 @@ def get_help_inline_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_meal_done_keyboard(meal_id: str) -> InlineKeyboardMarkup:
-    """Inline keyboard shown after meal is recorded — allows quick undo."""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="↩️ Отменить запись", callback_data=f"food:undo:{meal_id}")
-    return builder.as_markup()
-
-
 def get_settings_keyboard(
     night_notifications: bool = True,
-    health_enabled: bool = False,
+    ddoctor_enabled: bool = False,
     obsidian_sync_enabled: bool = False,
     improve_mode: bool = False,
-    nutrition_enabled: bool = True,
 ) -> InlineKeyboardMarkup:
     """Inline keyboard for Settings menu."""
     builder = InlineKeyboardBuilder()
     toggle_label = "🔔 Ночные уведомления: ВКЛ" if night_notifications else "🔕 Ночные уведомления: ВЫКЛ"
     builder.button(text=toggle_label, callback_data="settings:toggle_night")
-    health_label = "🫀 Здоровье (Oura): ВКЛ" if health_enabled else "🫀 Здоровье (Oura): ВЫКЛ"
-    builder.button(text=health_label, callback_data="settings:toggle_health")
-    nutrition_label = "🍽 Нутрициолог: ВКЛ" if nutrition_enabled else "🍽 Нутрициолог: ВЫКЛ"
-    builder.button(text=nutrition_label, callback_data="settings:toggle_nutrition")
+    ddoctor_label = "🔗 D-Doctor: ВКЛ" if ddoctor_enabled else "🔗 D-Doctor: ВЫКЛ"
+    builder.button(text=ddoctor_label, callback_data="settings:toggle_ddoctor")
     sync_label = "📡 Obsidian Sync: ВКЛ" if obsidian_sync_enabled else "📡 Obsidian Sync: ВЫКЛ"
     builder.button(text=sync_label, callback_data="settings:toggle_obsidian_sync")
     improve_label = "🔧 Улучшения: ВКЛ" if improve_mode else "🔧 Улучшения: ВЫКЛ"

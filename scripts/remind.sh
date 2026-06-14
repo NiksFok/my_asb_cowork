@@ -4,21 +4,16 @@ set -e
 source "$(dirname "$0")/common.sh"
 init
 
-DAY_MONTH=$(date +"%d %B")
+DAY_MONTH=$(LC_TIME=ru_RU.UTF-8 date +"%d %B" 2>/dev/null || date +"%d %B")
 
-# Get a fun fact about today via Claude
-FACT=$(claude --print --dangerously-skip-permissions --model claude-haiku-4-5-20251001 \
-    -p "Today is ${TODAY}. Find ONE interesting fact about this calendar date (${DAY_MONTH}) — a historical event, birthday of a famous person, or curious fact. 
-Rules: 
-- Answer in Russian
-- Max 2 sentences
-- No intro like 'Today is...' — just the fact itself
-- Use HTML: <b>name</b> for names/titles if needed
-- No markdown" \
-    2>/dev/null | head -5) || FACT=""
-
-# Fallback if Claude fails
-if [ -z "$FACT" ]; then
+# ASB v3.0: the "fun fact about today" used headless `claude -p` (haiku) which
+# would now bill against the Agent SDK credit. Generate it through the
+# persistent session instead (subscription); fall back to a static nudge if the
+# session is busy or slow.
+FACT=$(printf '%s' "Назови ОДИН короткий интересный факт (история, наука или культура), связанный с календарной датой ${DAY_MONTH}. Ответь одним предложением на русском, только сам факт, без преамбулы и кавычек." \
+    | (cd "$PROJECT_DIR" && uv run python -m d_brain.pipeline ask 2>>"$PROJECT_DIR/logs/pipeline-remind-$(date +%F).log")) || FACT=""
+FACT=$(printf '%s' "$FACT" | tr -d '\r' | head -c 280)
+if [ -z "${FACT// /}" ] || [ "${#FACT}" -lt 12 ]; then
     FACT="Каждый день — это новая возможность."
 fi
 

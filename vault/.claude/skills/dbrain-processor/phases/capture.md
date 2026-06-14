@@ -2,8 +2,8 @@
 type: note
 title: Phase 1: CAPTURE
 last_accessed: 2026-03-02
-relevance: 0.76
-tier: warm
+relevance: 0.1
+tier: archive
 ---
 # Phase 1: CAPTURE
 
@@ -13,7 +13,7 @@ Read daily entries, classify them, and output structured JSON.
 - `daily/{DATE}.md` — today's entries
 - `goals/3-weekly.md` — current week focus
 - `goals/2-monthly.md` — monthly priorities
-- `goals/1-yearly-2026.md` — yearly goals
+- `goals/1-yearly-*.md` — yearly goals (use the file passed in the prompt, e.g. `goals/1-yearly-2025.md`)
 
 ## Task
 

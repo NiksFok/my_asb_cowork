@@ -1,0 +1,8 @@
+[Unit]
+Description=Run d-brain weekly digest Sunday evening
+
+[Timer]
+OnCalendar=Sun 18:00
+
+[Install]
+WantedBy=timers.target

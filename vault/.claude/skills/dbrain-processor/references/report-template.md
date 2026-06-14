@@ -2,8 +2,8 @@
 type: note
 title: HTML Report Template
 last_accessed: 2026-02-25
-relevance: 0.69
-tier: warm
+relevance: 0.1
+tier: archive
 ---
 # HTML Report Template
 
@@ -49,7 +49,7 @@ NO unsupported tags: div, span, br, p, table, tr, td
 • {emoji} {title} → {category}/
 
 <b>✅ Создано задач:</b> {M}
-• {task_name} <i>({priority}, {due})</i>
+• <a href="https://app.todoist.com/app/task/{task_id}">{task_name}</a> <i>({priority}, {due})</i>
 
 <b>📅 Загрузка на неделю:</b>
 Пн: {n} | Вт: {n} | Ср: {n} | Чт: {n} | Пт: {n} | Сб: {n} | Вс: {n}
@@ -83,8 +83,9 @@ Count saved, list with category emoji:
 💡 idea, 🪞 reflection, 🎯 project, 📚 learning
 
 ### Tasks (✅)
-Count created, list with priority and due date.
-Format: • Task name <i>(p2, friday)</i>
+Count created, list as Todoist hyperlinks with priority and due date.
+Format: • <a href="https://app.todoist.com/app/task/{task_id}">{task_name}</a> <i>({priority}, {due})</i>
+Never show raw task ID — always wrap in <a href="https://app.todoist.com/app/task/TASK_ID">.
 
 ### Week Load (📅)
 Call find-tasks-by-date for 7 days.

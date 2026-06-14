@@ -2,8 +2,8 @@
 type: note
 title: Critical Processing Rules
 last_accessed: 2026-02-25
-relevance: 0.69
-tier: warm
+relevance: 0.1
+tier: archive
 ---
 # Critical Processing Rules
 
@@ -78,6 +78,12 @@ NEVER create:
 - Академическая теория без применения
 
 See [ABOUT.md](ABOUT.md) → Anti-Patterns section.
+
+---
+
+## Rule 8: Language of Agent Explanations
+
+All explanations and change descriptions that the agent provides to the user must be in **Russian**.
 
 ---
 

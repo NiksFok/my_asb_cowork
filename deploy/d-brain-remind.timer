@@ -1,0 +1,8 @@
+[Unit]
+Description=Remind to write daily reflection at 20:00
+
+[Timer]
+OnCalendar=*-*-* 20:00:00
+
+[Install]
+WantedBy=timers.target

@@ -103,11 +103,9 @@ LOG_ERRORS=$(journalctl -u d-brain-bot -u d-brain-process -u d-brain-morning \
 
 # ── Phase 1: CAPTURE ──
 echo "=== Phase 1: CAPTURE ==="
-CAPTURE=$(claude --print --dangerously-skip-permissions --model claude-sonnet-4-6 \
-    -p "Today is $TODAY. Read .claude/skills/dbrain-processor/phases/capture.md and execute Phase 1.
-Read daily/$TODAY.md, goals/3-weekly.md, goals/2-monthly.md, goals/$YEARLY_GOALS_NAME.
-Classify each entry. Return ONLY JSON." \
-    2>&1) || true
+# ASB v3.0: phases run on the persistent interactive session (subscription),
+# not headless `claude -p`. The prompt now lives in d_brain.pipeline.
+CAPTURE=$(cd "$PROJECT_DIR" && TODAY="$TODAY" uv run python -m d_brain.pipeline capture 2>&1) || true
 
 # Save raw output for debugging
 echo "$CAPTURE" > "$SESSION_DIR/capture.raw.log"
@@ -122,44 +120,56 @@ echo "Capture saved: $(wc -c < "$CAPTURE_FILE") bytes"
 if grep -q '"error"' "$CAPTURE_FILE"; then
     echo "WARN: Capture phase had issues, falling back to monolith mode"
     # Fallback to monolith processing (same as old process.sh)
-    REPORT=$(claude --print --dangerously-skip-permissions --model claude-sonnet-4-6 \
-        --mcp-config "$PROJECT_DIR/mcp-config.json" \
-        -p "Today is $TODAY. TIME: 23:00. EVENING DAILY PROCESSING.
-
-USE ONLY: dbrain-processor skill. Output template: Обработка за {DATE}
-DO NOT use morning-briefer skill. DO NOT generate morning briefing.
-
-TASK: Process todays voice/text entries -> classify -> create Todoist tasks -> save thoughts -> generate evening HTML report.$([ "${HEALTH_ENABLED:-false}" = "true" ] && echo " Also call Oura MCP (get_stress, get_daily_sleep, get_readiness) to include health context in the report — correlate stress peaks with events from daily notes.")
-
-$MCP_PROMPT" \
-        2>&1) || true
+    REPORT=$(cd "$PROJECT_DIR" && TODAY="$TODAY" uv run python -m d_brain.pipeline daily 2>>"$PROJECT_DIR/logs/pipeline-daily-$TODAY.log") || true
 else
     # ── Phase 2: EXECUTE ──
     # Uses mcp-cli (Bash) for Todoist — no --mcp-config needed
     echo "=== Phase 2: EXECUTE ==="
-    EXECUTE=$(claude --print --dangerously-skip-permissions --model claude-sonnet-4-6 \
-        -p "Today is $TODAY. Read .claude/skills/dbrain-processor/phases/execute.md and execute Phase 2.
-Read .session/capture.json for input data.
-Create tasks in Todoist via mcp-cli (Bash tool), save thoughts, build links. Return ONLY JSON.
+    EXECUTE_OK=false
+    for EXECUTE_ATTEMPT in 1 2; do
+        EXECUTE=$(cd "$PROJECT_DIR" && TODAY="$TODAY" uv run python -m d_brain.pipeline execute 2>&1) || true
 
-CRITICAL: Use Bash tool to call mcp-cli for Todoist operations.
-Example: mcp-cli call todoist find-tasks-by-date '{\"startDate\": \"today\"}'
-mcp-cli may take 10-30 sec on first call (server startup). Retry 3x on error." \
-        2>&1) || true
+        # Save raw output for debugging
+        echo "$EXECUTE" > "$SESSION_DIR/execute.raw.log"
 
-    # Save raw output for debugging
-    echo "$EXECUTE" > "$SESSION_DIR/execute.raw.log"
+        # Log full raw output if suspiciously short (raw_length < 10)
+        EXECUTE_RAW_LEN=${#EXECUTE}
+        if [ "$EXECUTE_RAW_LEN" -lt 10 ]; then
+            echo "ERROR: Phase 2 raw output empty (len=$EXECUTE_RAW_LEN, attempt=$EXECUTE_ATTEMPT)" >&2
+            mkdir -p "$PROJECT_DIR/logs"
+            {
+                echo "=== execute-error $TODAY attempt=$EXECUTE_ATTEMPT ==="
+                echo "raw_length=$EXECUTE_RAW_LEN"
+                printf '%s\n' "$EXECUTE"
+            } >> "$PROJECT_DIR/logs/execute-error-$TODAY.log"
+        fi
 
-    echo "$EXECUTE" | python3 "$SCRIPTS_DIR/extract_json.py" > "$EXECUTE_FILE" 2>/dev/null \
-        || echo '{"error": "execute failed"}' > "$EXECUTE_FILE"
+        # Extract JSON and validate before writing execute.json
+        EXECUTE_TMP=$(echo "$EXECUTE" | python3 "$SCRIPTS_DIR/extract_json.py" 2>/dev/null) || EXECUTE_TMP=""
+        if echo "$EXECUTE_TMP" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d and 'error' not in d else 1)" 2>/dev/null; then
+            echo "$EXECUTE_TMP" > "$EXECUTE_FILE"
+            EXECUTE_OK=true
+            break
+        else
+            echo "WARN: Phase 2 attempt $EXECUTE_ATTEMPT returned invalid/empty JSON" >&2
+            echo "$EXECUTE_TMP" > "$EXECUTE_FILE.err"
+            echo '{"error": "execute failed"}' > "$EXECUTE_FILE"
+        fi
+    done
+
+    if [ "$EXECUTE_OK" = false ]; then
+        echo "ERROR: Phase 2 failed after all attempts — execute.json invalid" >&2
+        exit 1
+    fi
 
     echo "Execute saved: $(wc -c < "$EXECUTE_FILE") bytes"
 
     # ── Phase 3: REFLECT ──
-    # -- Pre-REFLECT: Fetch Oura full-day health context --
+    # -- Pre-REFLECT: Fetch Oura + nutrition context (d-doctor integration) --
     OURA_CONTEXT=""
-    if [ "${HEALTH_ENABLED:-false}" = "true" ]; then
-        echo "=== Fetching Oura health context ==="
+    NUTRITION_CONTEXT=""
+    if [ "${DDOCTOR_ENABLED:-false}" = "true" ]; then
+        echo "=== Fetching Oura health context (d-doctor) ==="
         OURA_PROMPT="Today is $TODAY. Call ALL of the following Oura MCP tools and return a compact plain text summary in Russian (no HTML, no markdown):
 1. get_daily_sleep — ночной сон: score, duration, efficiency, deep/REM/light breakdown
 2. get_readiness — readiness score + key contributors (HRV balance, recovery index, body temperature)
@@ -167,16 +177,12 @@ mcp-cli may take 10-30 sec on first call (server startup). Retry 3x on error." \
 4. get_heart_rate — resting HR, any notable spikes or drops
 5. get_daily_activity — шаги, active calories, distance, movement goal progress
 Format: one line per metric category, values in brackets. Example: Сон: [score=78] 7ч 20мин, эффективность 88%, глубокий 1ч 10мин. Keep each line concise."
-        OURA_CONTEXT=$(claude --print --dangerously-skip-permissions --model claude-sonnet-4-6 --mcp-config "$PROJECT_DIR/mcp-config.json" -p "$OURA_PROMPT" 2>&1) || OURA_CONTEXT=""
+        OURA_CONTEXT=$(claude --print --dangerously-skip-permissions --model claude-sonnet-4-6 --mcp-config "$PROJECT_DIR/mcp-config.json" -p "$OURA_PROMPT" 2>&1) || OURA_CONTEXT=""  # ALLOW-CLAUDE-P: d-doctor Oura, gated by DDOCTOR_ENABLED (default off); migrated in Phase 6
         # Strip any preamble Claude might add
         OURA_CONTEXT=$(echo "$OURA_CONTEXT" | grep -v '^$' | grep -v 'Here is\|Вот\|Let me\|I will\|Calling' | head -20 || echo "$OURA_CONTEXT")
-    fi
 
-    # -- Pre-REFLECT: Fetch nutrition context from Supabase --
-    NUTRITION_CONTEXT=""
-    if [ "${NUTRITION_ENABLED:-true}" = "true" ] && [ -n "${SUPABASE_URL:-}" ] && [ -n "${SUPABASE_KEY:-}" ]; then
-        echo "=== Fetching nutrition context ==="
-        NUTRITION_CONTEXT=$(uv run python "$SCRIPTS_DIR/nutrition_context.py" 2>/dev/null || echo "")
+        echo "=== Fetching nutrition context (d-doctor) ==="
+        NUTRITION_CONTEXT=$(uv run python /home/niks/my_doctor/scripts/nutrition_context.py 2>/dev/null || echo "")
     fi
 
     HEALTH_SECTION=""
@@ -208,36 +214,36 @@ Add a nutrition section to the HTML report (after health section):
     fi
 
     echo "=== Phase 3: REFLECT ==="
-    REPORT=$(claude --print --dangerously-skip-permissions --model claude-sonnet-4-6 \
-        -p "Today is $TODAY. Read .claude/skills/dbrain-processor/phases/reflect.md and execute Phase 3.
-Read .session/capture.json and .session/execute.json for input data.
-Read MEMORY.md, .session/handoff.md.
-Generate HTML report, update MEMORY, record observations.
-
-SYSTEM LOGS (last 24h, may be empty):
-${LOG_ERRORS}
-
-AGENT NOTES TASK: Scan the input text for:
-1. User complaints about the bot (not found, failed, broken, did not save) - add to vault/agent/agent_notes.md section "Проблемы из рефлексии" with id: r-{DATE}-NNN
-2. Ideas for new automations (would be convenient, want a command, should automate) - add to "Идеи агента" with id: a-{DATE}-NNN
-3. If LOG_ERRORS is not empty - add brief error summary to "Системные ошибки" with id: e-{DATE}-NNN (skip if already logged today)
-4. If you notice friction patterns or repetitive actions - add 1-2 ideas to "Идеи агента"
-
-Format for each agent_notes.md entry:
-- \`[ ]\` **[source]** description <!-- id: X-YYYYMMDD-NNN -->
-
-FORMATTING RULES (mandatory for Telegram report):
-- Tasks: ONLY name + priority + due date. NEVER include task ID (like abc123xyz).
-- Thoughts: read each saved file H1 heading, show title in RUSSIAN. NO [[wikilink]] syntax.
-- New links: plain note names without [[ ]] brackets.
-${HEALTH_SECTION}
-${NUTRITION_SECTION}
-
-Return ONLY RAW HTML (for Telegram)." \
-        2>&1) || true
+    # Hand the shell-computed dynamic context to the pipeline via .session files
+    # (the static reflect prompt now lives in d_brain.pipeline).
+    mkdir -p "$SESSION_DIR"
+    printf '%s' "$LOG_ERRORS" > "$SESSION_DIR/log_errors.txt"
+    printf '%s\n%s' "$HEALTH_SECTION" "$NUTRITION_SECTION" > "$SESSION_DIR/reflect_extra.md"
+    REPORT=$(cd "$PROJECT_DIR" && TODAY="$TODAY" uv run python -m d_brain.pipeline reflect 2>>"$PROJECT_DIR/logs/pipeline-reflect-$TODAY.log") || true
 fi
 
 cd "$PROJECT_DIR"
+
+# Validate the report is REAL, then one strict retry, then a minimal fallback.
+# The model formats the evening report as emoji+text (same as the morning brief)
+# OR as Telegram HTML — both render fine — so we must NOT require <b> tags (that
+# rejected good reports and sent the fallback card). A report is "bad" only if
+# it is too short to be a real report or is an ask() error sentinel.
+_report_is_bad() {
+    local r="$1"
+    [ "${#r}" -lt 120 ] && return 0
+    printf '%s' "$r" | head -1 | grep -qiE "session stalled|no reply in|session start failed|could not acquire|pane lock|rate_limited|logged_out|empty prompt|unknown command|pipeline .* failed" && return 0
+    return 1
+}
+if _report_is_bad "$REPORT"; then
+    echo "WARN: Phase 3 report empty/failed — retrying with strict prompt"
+    REPORT=$(cd "$PROJECT_DIR" && TODAY="$TODAY" uv run python -m d_brain.pipeline reflect-strict 2>>"$PROJECT_DIR/logs/pipeline-reflect-$TODAY.log") || true
+    if _report_is_bad "$REPORT"; then
+        echo "WARN: Retry also failed — sending fallback minimal card"
+        REPORT="📋 <b>D-Brain $TODAY</b>
+⚠️ Не удалось собрать вечерний разбор. Полный лог в vault/daily/$TODAY.md"
+    fi
+fi
 
 echo "=== Claude output ==="
 echo "$REPORT"
@@ -245,10 +251,23 @@ echo "===================="
 
 REPORT_CLEAN=$(clean_claude_output "$REPORT")
 
+# Send to Telegram immediately after report is ready (before vault ops that may timeout)
+send_telegram "$REPORT_CLEAN"
+
+# Trim handoff.md — drops accumulated "## Last Session (предыдущая…)" sections
+echo "=== Rotate handoff ==="
+uv run python scripts/rotate_handoff.py || echo "Handoff rotation failed (non-critical)"
+
 # Rebuild vault graph
 echo "=== Rebuilding vault graph ==="
 cd "$VAULT_DIR"
 uv run .claude/skills/graph-builder/scripts/analyze.py || echo "Graph rebuild failed (non-critical)"
+
+# Remove phantom wikilinks from ## Related sections (conservative: only drops
+# links that resolve to no note — e.g. unfilled template placeholders, stale
+# year-rollover targets; body links are never touched).
+echo "=== Cleaning phantom links ==="
+uv run .claude/skills/vault-health/scripts/link_cleanup.py . --apply || echo "Link cleanup failed (non-critical)"
 
 # Memory decay (update relevance scores and tiers)
 echo "=== Memory decay ==="
@@ -263,8 +282,5 @@ cd "$PROJECT_DIR"
 git add vault/
 git commit -m "chore: process daily $TODAY" || true
 git push || true
-
-# Send to Telegram
-send_telegram "$REPORT_CLEAN"
 
 echo "=== Done ==="

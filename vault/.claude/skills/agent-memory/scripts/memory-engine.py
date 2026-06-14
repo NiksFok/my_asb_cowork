@@ -44,6 +44,7 @@ import sys
 import json
 import random
 import subprocess
+from math import log
 from datetime import datetime, date
 from pathlib import Path
 from typing import Optional
@@ -54,6 +55,9 @@ DEFAULT_CONFIG = {
     "tiers": {"active": 7, "warm": 21, "cold": 60},
     "decay_rate": 0.015,
     "relevance_floor": 0.1,
+    # Per-type decay rates; empty → every type uses decay_rate (old behaviour).
+    # Populated from .memory-config.json keyed by the card `type`.
+    "domain_rates": {},
     "skip_patterns": ["_index.md"],
     "type_inference": {},
     "use_git_dates": True,
@@ -87,7 +91,7 @@ def build_frontmatter(fields: dict, field_order: list[str] | None = None) -> str
             "industry", "source", "priority", "status", "region",
             "owner", "responsible", "domain", "related", "client",
             "deal_status", "deal_deadline", "deadline",
-            "created", "updated", "last_accessed", "relevance", "tier",
+            "created", "updated", "last_accessed", "access_count", "relevance", "tier",
         ]
     lines = []
     used = set()
@@ -139,9 +143,34 @@ def get_best_date(fields: dict, filepath: Path, use_git: bool = True) -> date:
 
 # ─── core logic ─────────────────────────────────────────────────
 
-def calc_relevance(days: int, rate: float, floor: float) -> float:
-    """Linear decay with floor."""
-    return round(max(floor, 1.0 - days * rate), 2)
+def calc_relevance(days: int, rate: float, floor: float, access_count: int = 1) -> float:
+    """Ebbinghaus decay with a spacing effect.
+
+    strength = 1 + ln(access_count): each meaningful re-read makes a card decay
+    slower (spaced repetition). access_count <= 1 (or missing) → strength 1.0 →
+    plain linear decay, identical to the old behaviour — so existing cards that
+    were never touched are unaffected (backward-compatible lazy migration).
+    """
+    strength = 1.0 + log(max(access_count, 1))
+    effective_rate = rate / strength
+    return round(max(floor, 1.0 - days * effective_rate), 2)
+
+
+def rate_for_type(card_type: str, config: dict) -> float:
+    """Per-domain decay rate (daily forgets fast, goals/contacts slow).
+
+    Falls back to the global decay_rate when a type has no override, so an
+    empty domain_rates map reproduces the old single-rate behaviour.
+    """
+    return config.get("domain_rates", {}).get(card_type, config["decay_rate"])
+
+
+def get_access_count(fields: dict) -> int:
+    """Read access_count from frontmatter; absent/garbage → 1."""
+    try:
+        return max(1, int(str(fields.get("access_count", "1")).strip()))
+    except (ValueError, TypeError):
+        return 1
 
 
 def calc_tier(days: int, tiers: dict, current_tier: str = "") -> str:
@@ -384,7 +413,8 @@ def cmd_init(target_dir: Path, config: dict, dry_run: bool = False, verbose: boo
         ref_date = get_best_date({}, card, config["use_git_dates"])
         new_fields["last_accessed"] = ref_date.isoformat()
         days = max(0, (TODAY - ref_date).days)
-        new_fields["relevance"] = str(calc_relevance(days, config["decay_rate"], config["relevance_floor"]))
+        rate = rate_for_type(new_fields["type"], config)
+        new_fields["relevance"] = str(calc_relevance(days, rate, config["relevance_floor"]))
         new_fields["tier"] = calc_tier(days, config["tiers"])
 
         new_content = build_frontmatter(new_fields) + body
@@ -412,7 +442,10 @@ def cmd_decay(target_dir: Path, config: dict, dry_run: bool = False, verbose: bo
         days = max(0, (TODAY - ref_date).days)
 
         old_tier = fields.get("tier", "")
-        new_relevance = calc_relevance(days, config["decay_rate"], config["relevance_floor"])
+        card_type = fields.get("type") or infer_type(card, config["type_inference"])
+        rate = rate_for_type(card_type, config)
+        access_count = get_access_count(fields)
+        new_relevance = calc_relevance(days, rate, config["relevance_floor"], access_count)
         new_tier = calc_tier(days, config["tiers"], old_tier)
 
         if "last_accessed" not in fields:
@@ -473,6 +506,7 @@ def cmd_touch(filepath: str, config: dict):
     fields, body, had_yaml = parse_frontmatter(content)
 
     if fields.get("tier") == "core":
+        fields["access_count"] = str(get_access_count(fields) + 1)
         fields["last_accessed"] = TODAY.isoformat()
         fields["relevance"] = "1.0"
         new_content = build_frontmatter(fields) + body
@@ -510,8 +544,12 @@ def cmd_touch(filepath: str, config: dict):
 
     from datetime import timedelta
     new_date = TODAY - timedelta(days=target_days)
-    new_relevance = calc_relevance(target_days, config["decay_rate"], config["relevance_floor"])
+    access_count = get_access_count(fields) + 1  # this read counts as an access
+    card_type = fields.get("type") or infer_type(p, config["type_inference"])
+    rate = rate_for_type(card_type, config)
+    new_relevance = calc_relevance(target_days, rate, config["relevance_floor"], access_count)
 
+    fields["access_count"] = str(access_count)
     fields["last_accessed"] = new_date.isoformat()
     fields["relevance"] = str(new_relevance)
     fields["tier"] = new_tier
@@ -582,7 +620,10 @@ def cmd_daily(target_dir: Path, config: dict, dry_run: bool = False, verbose: bo
         except (ValueError, IndexError):
             ref_days = days
 
-        new_relevance = calc_relevance(ref_days, config["decay_rate"], config["relevance_floor"])
+        access_count = get_access_count(fields)
+        new_relevance = calc_relevance(
+            ref_days, rate_for_type("daily", config), config["relevance_floor"], access_count
+        )
         old_tier = fields.get("tier", "")
         new_tier = calc_tier(ref_days, config["tiers"], old_tier)
 

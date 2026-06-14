@@ -65,6 +65,7 @@ async def cmd_start(message: Message) -> None:
         "/do - выполнить произвольный запрос\n"
         "/weekly - недельный дайджест\n"
         "/done - завершить рефлексию недели\n"
+        "/cascade - каскадное ревью целей\n"
         "/fix - добавить исправление транскрипции\n"
         "/help - справка",
         reply_markup=get_main_keyboard(settings),
@@ -99,6 +100,7 @@ async def cmd_help(message: Message) -> None:
         "/do - выполнить произвольный запрос\n"
         "/weekly - недельный дайджест\n"
         "/done - завершить рефлексию недели\n"
+        "/cascade - каскадное ревью целей (год → месяц → неделя)\n"
         "/fix - добавить правило исправления транскрипции\n\n"
         "<i>Пример /do: перенеси просроченные задачи на понедельник</i>",
         reply_markup=get_main_keyboard(),
@@ -173,7 +175,7 @@ async def cmd_settings(message: Message) -> None:
         f"<b>Настройки</b>\n\n"
         f"🏙️ Город: <b>{settings.location_city}</b>\n",
         reply_markup=get_settings_keyboard(
-            _night_notifications_enabled, settings.health_enabled, settings.obsidian_sync_enabled, settings.improve_mode, settings.nutrition_enabled
+            _night_notifications_enabled, settings.ddoctor_enabled, settings.obsidian_sync_enabled, settings.improve_mode
         ),
     )
 
@@ -221,7 +223,7 @@ async def cb_settings(callback: CallbackQuery) -> None:
         f"<b>Настройки</b>\n\n"
         f"🏙️ Город: <b>{settings.location_city}</b>\n",
         reply_markup=get_settings_keyboard(
-            _night_notifications_enabled, settings.health_enabled, settings.obsidian_sync_enabled, settings.improve_mode, settings.nutrition_enabled
+            _night_notifications_enabled, settings.ddoctor_enabled, settings.obsidian_sync_enabled, settings.improve_mode
         ),
     )
 
@@ -240,24 +242,25 @@ async def cb_toggle_night(callback: CallbackQuery) -> None:
         f"<b>Настройки</b>\n\n"
         f"🏙️ Город: <b>{settings.location_city}</b>\n",
         reply_markup=get_settings_keyboard(
-            _night_notifications_enabled, settings.health_enabled, settings.obsidian_sync_enabled, settings.improve_mode, settings.nutrition_enabled
+            _night_notifications_enabled, settings.ddoctor_enabled, settings.obsidian_sync_enabled, settings.improve_mode
         ),
     )
 
 
-@router.callback_query(F.data == "settings:toggle_health")
-async def cb_toggle_health(callback: CallbackQuery) -> None:
-    """Toggle Oura health module."""
+@router.callback_query(F.data == "settings:toggle_ddoctor")
+async def cb_toggle_ddoctor(callback: CallbackQuery) -> None:
+    """Toggle D-Doctor integration (nutrition + Oura context in REFLECT)."""
     settings = get_settings()
-    new_value = not settings.health_enabled
-    object.__setattr__(settings, "health_enabled", new_value)
+    new_value = not settings.ddoctor_enabled
+    object.__setattr__(settings, "ddoctor_enabled", new_value)
+    _write_env_flag("DDOCTOR_ENABLED", str(new_value).lower())
     status = "включён" if new_value else "выключен"
-    await callback.answer(f"Модуль здоровья {status}")
+    await callback.answer(f"D-Doctor {status}")
     await callback.message.edit_text(  # type: ignore[union-attr]
         f"<b>Настройки</b>\n\n"
         f"🏙️ Город: <b>{settings.location_city}</b>\n",
         reply_markup=get_settings_keyboard(
-            _night_notifications_enabled, new_value, settings.obsidian_sync_enabled, settings.improve_mode, settings.nutrition_enabled
+            _night_notifications_enabled, new_value, settings.obsidian_sync_enabled, settings.improve_mode
         ),
     )
 
@@ -275,7 +278,7 @@ async def cb_toggle_obsidian_sync(callback: CallbackQuery) -> None:
         f"<b>Настройки</b>\n\n"
         f"🏙️ Город: <b>{settings.location_city}</b>\n",
         reply_markup=get_settings_keyboard(
-            _night_notifications_enabled, settings.health_enabled, new_value, settings.improve_mode, settings.nutrition_enabled
+            _night_notifications_enabled, settings.ddoctor_enabled, new_value, settings.improve_mode
         ),
     )
 
@@ -293,25 +296,7 @@ async def cb_toggle_improve(callback: CallbackQuery) -> None:
         f"<b>Настройки</b>\n\n"
         f"🏙️ Город: <b>{settings.location_city}</b>\n",
         reply_markup=get_settings_keyboard(
-            _night_notifications_enabled, settings.health_enabled, settings.obsidian_sync_enabled, new_value, settings.nutrition_enabled
-        ),
-    )
-
-
-@router.callback_query(F.data == "settings:toggle_nutrition")
-async def cb_toggle_nutrition(callback: CallbackQuery) -> None:
-    """Toggle nutrition tracking (hides/shows 🍽 Еда button and КБЖУ features)."""
-    settings = get_settings()
-    new_value = not settings.nutrition_enabled
-    object.__setattr__(settings, "nutrition_enabled", new_value)
-    _write_env_flag("NUTRITION_ENABLED", str(new_value).lower())
-    status = "включён" if new_value else "выключен"
-    await callback.answer(f"Нутрициолог {status}")
-    await callback.message.edit_text(  # type: ignore[union-attr]
-        f"<b>Настройки</b>\n\n"
-        f"🏙️ Город: <b>{settings.location_city}</b>\n",
-        reply_markup=get_settings_keyboard(
-            _night_notifications_enabled, settings.health_enabled, settings.obsidian_sync_enabled, settings.improve_mode, new_value
+            _night_notifications_enabled, settings.ddoctor_enabled, settings.obsidian_sync_enabled, new_value
         ),
     )
 
@@ -347,6 +332,6 @@ async def handle_city_input(message: Message, state: FSMContext) -> None:
     await message.answer(
         f"✅ Город обновлён: <b>{city}</b>",
         reply_markup=get_settings_keyboard(
-            _night_notifications_enabled, settings.health_enabled, settings.obsidian_sync_enabled, settings.improve_mode, settings.nutrition_enabled
+            _night_notifications_enabled, settings.ddoctor_enabled, settings.obsidian_sync_enabled, settings.improve_mode
         ),
     )

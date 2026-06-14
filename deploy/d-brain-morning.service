@@ -1,0 +1,10 @@
+[Unit]
+Description=d-brain Morning Briefing
+
+[Service]
+Type=oneshot
+User=niks
+WorkingDirectory=/home/niks/my_asb
+ExecStart=/home/niks/my_asb/scripts/morning.sh
+TimeoutStartSec=900
+Environment=PYTHONUNBUFFERED=1

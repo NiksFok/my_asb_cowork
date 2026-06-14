@@ -2,8 +2,8 @@
 type: note
 description: Reads vault/agent/agent_notes.md, analyzes last 7 days entries, proposes top improvements
 last_accessed: 2026-03-13
-relevance: 0.93
-tier: active
+relevance: 0.1
+tier: archive
 name: agent-improver
 ---
 

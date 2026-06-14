@@ -1,0 +1,8 @@
+[Unit]
+Description=Finalize d-brain weekly reflection Monday morning
+
+[Timer]
+OnCalendar=Mon 09:00
+
+[Install]
+WantedBy=timers.target

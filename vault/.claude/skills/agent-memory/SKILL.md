@@ -2,8 +2,8 @@
 type: note
 description: >-
 last_accessed: 2026-02-26
-relevance: 0.7
-tier: warm
+relevance: 0.1
+tier: archive
 name: agent-memory
 Use when: (1) setting up memory for a new agent, (2) diagnosing memory bloat or context
 Triggers: "memory management", "organize vault", "memory decay", "forgetting curve",

@@ -24,15 +24,23 @@ TODAY        = date.today().isoformat()
 MAX_ARTICLES = 5   # max articles to fully fetch
 
 
-# ── Claude haiku subprocess ────────────────────────────────────────────────
+# ── Summary generation via the persistent session ──────────────────────────
 
-def run_haiku(prompt: str, timeout: int = 60) -> str:
+def run_haiku(prompt: str, timeout: int = 120) -> str:
+    """Generate a short summary through the shared interactive session.
+
+    ASB v3.0: subscription billing — NOT headless `claude --print` haiku (which
+    bills the Agent SDK credit from 15.06). The session model (Opus) handles
+    these fine. Best-effort: empty string on any failure so the morning news
+    step never crashes. The function name is kept for call-site compatibility.
+    """
     try:
-        r = subprocess.run(
-            ["claude", "--print", "--model", "claude-haiku-4-5-20251001", "-p", prompt],
-            capture_output=True, text=True, timeout=timeout, check=False,
+        from d_brain.config import get_settings
+        from d_brain.services.runtime import get_session
+        res = get_session(get_settings()).ask(
+            prompt, timeout=float(timeout), request_id="maint-news", wrap=True
         )
-        return r.stdout.strip() if r.returncode == 0 else ""
+        return (res.reply or "").strip() if res.ok else ""
     except Exception:
         return ""
 

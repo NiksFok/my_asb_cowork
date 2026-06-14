@@ -11,6 +11,7 @@ from aiogram.types import Message
 
 from d_brain.config import get_settings
 from d_brain.services.git import VaultGit
+from d_brain.services.cascade_handler import handle_cascade_reply
 from d_brain.services.reflection import ReflectionService
 from d_brain.services.session import SessionStore
 from d_brain.services.storage import VaultStorage
@@ -81,6 +82,18 @@ async def handle_text(message: Message) -> None:
     # --- Any message containing URLs ---
     if has_urls(message.text):
         await _handle_urls(message, settings)
+        return
+
+    # --- cascade goal review intercept ---
+    bot = message.bot
+    cascade_outcome = await handle_cascade_reply(
+        vault_path=settings.vault_path,
+        bot=bot,
+        user_id=message.from_user.id,
+        text=message.text,
+    )
+    if cascade_outcome != 'not_active':
+        logger.info('Text routed to cascade review: %s', cascade_outcome)
         return
 
     # --- Plain text ---

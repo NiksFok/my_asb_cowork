@@ -1,0 +1,31 @@
+{
+  "tiers": {"active": 7, "warm": 21, "cold": 60},
+  "decay_rate": 0.015,
+  "relevance_floor": 0.1,
+  "domain_rates": {
+    "_comment": "per-type decay/day; ephemeral=fast, durable=slow; missing type -> decay_rate",
+    "daily": 0.020,
+    "note": 0.015,
+    "idea": 0.012,
+    "project": 0.012,
+    "project-note": 0.012,
+    "weekly": 0.012,
+    "weekly-summary": 0.012,
+    "reflection": 0.010,
+    "learning": 0.010,
+    "goal": 0.008,
+    "monthly": 0.008,
+    "crm": 0.008,
+    "yearly": 0.006
+  },
+  "skip_patterns": ["_index.md", "corrections.md", "MOC-*"],
+  "type_inference": {
+    "daily/": "daily",
+    "thoughts/ideas/": "idea",
+    "thoughts/reflections/": "reflection",
+    "thoughts/learnings/": "learning",
+    "thoughts/projects/": "project",
+    "goals/": "goal"
+  },
+  "use_git_dates": true
+}

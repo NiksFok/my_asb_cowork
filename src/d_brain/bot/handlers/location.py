@@ -125,14 +125,14 @@ def _find_location_hint(vault_path: Path, base_city: str) -> str | None:
         'Примеры: {"area": "Namba"} или {"area": null}'
     )
 
+    from d_brain.services.runtime import ask_text
+
     try:
-        result = subprocess.run(
-            ["claude", "--print", "--model", "claude-haiku-4-5-20251001", "-p", prompt],
-            capture_output=True, text=True, timeout=30, check=False,
-        )
-        if result.returncode != 0:
+        output = ask_text(
+            prompt, timeout=120.0, request_id="maint-location", wrap=True
+        ).strip()
+        if not output:
             return None
-        output = result.stdout.strip()
         # Strip markdown code fence if present
         if "```" in output:
             output = output.split("```")[1].lstrip("json").strip()

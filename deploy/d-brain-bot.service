@@ -1,0 +1,20 @@
+[Unit]
+Description=d-brain Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=niks
+WorkingDirectory=/home/niks/my_asb
+ExecStart=/home/niks/.local/bin/uv run python -m d_brain
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+# ASB v3.0: the persistent Claude session lives in a detached tmux server that
+# the bot spawns. KillMode=process kills ONLY the bot on stop/restart, leaving
+# the tmux brain (and thus the subscription session) alive across bot restarts.
+KillMode=process
+SuccessExitStatus=143 SIGTERM
+
+[Install]
+WantedBy=multi-user.target

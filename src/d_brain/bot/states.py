@@ -4,9 +4,10 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class DoCommandState(StatesGroup):
-    """States for /do command flow (legacy one-shot mode)."""
+    """States for the /do request flow."""
 
-    waiting_for_input = State()  # Waiting for voice or text after /do
+    waiting_for_input = State()  # Waiting for the first voice/text after /do
+    in_conversation = State()    # Follow-up turns continue the same session
 
 
 class EditModeState(StatesGroup):
@@ -21,12 +22,6 @@ class AgentSessionState(StatesGroup):
 
     in_session = State()          # Active session, waiting for user commands
     awaiting_permission = State() # Claude paused, waiting for user approval
-
-
-class FoodState(StatesGroup):
-    """States for food logging session."""
-
-    collecting = State()  # Collecting photos/voice/text for a meal
 
 
 class SettingsState(StatesGroup):

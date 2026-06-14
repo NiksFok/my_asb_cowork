@@ -1,0 +1,18 @@
+[Unit]
+Description=d-brain Session Watchdog (keeps the persistent Claude session alive)
+After=network.target d-brain-bot.service
+
+[Service]
+Type=simple
+User=niks
+WorkingDirectory=/home/niks/my_asb
+ExecStart=/home/niks/.local/bin/uv run python -m d_brain.services.watchdog
+Restart=always
+RestartSec=15
+Environment=PYTHONUNBUFFERED=1
+# Recover (force_recover) only restarts the tmux session, never kills siblings.
+KillMode=process
+SuccessExitStatus=143 SIGTERM
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=d-brain daily self-diagnostic (canary + local checks, 🟢/🔴 to Telegram)
+After=network.target d-brain-bot.service
+
+[Service]
+Type=oneshot
+User=niks
+WorkingDirectory=/home/niks/my_asb
+# get_settings() loads .env from WorkingDirectory (pydantic-settings), so no
+# EnvironmentFile is needed — same as the watchdog unit.
+ExecStart=/home/niks/.local/bin/uv run python -m d_brain.services.doctor
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/niks/.local/bin:/usr/local/bin:/usr/bin:/bin

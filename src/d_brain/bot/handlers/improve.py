@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 import re
-import subprocess
 from datetime import date
 from pathlib import Path
 
@@ -51,17 +50,14 @@ def _get_proposals(vault_path: Path) -> list[dict]:
         f"Содержимое agent_notes.md:\n{notes_content}"
     )
 
+    from d_brain.services.runtime import ask_text
+
     try:
-        result = subprocess.run(
-            ["claude", "--print", "--dangerously-skip-permissions",
-             "--model", "claude-haiku-4-5-20251001", "-p", prompt],
-            capture_output=True, text=True, timeout=60,
-            cwd=str(vault_path.parent), check=False,
-        )
-        if result.returncode != 0:
-            logger.error("Claude proposals failed: %s", result.stderr[:200])
+        output = ask_text(
+            prompt, timeout=180.0, request_id="maint-improve-proposals", wrap=True
+        ).strip()
+        if not output:
             return []
-        output = result.stdout.strip()
         # Strip markdown fences if present
         if "```" in output:
             output = re.sub(r"```(?:json)?\s*", "", output).strip().rstrip("`").strip()
@@ -164,13 +160,11 @@ def _verify_concept_implemented(vault_path: Path, concept_file: str) -> dict:
             f"Ответь ТОЛЬКО JSON без markdown:\n"
             f'{"implemented": true/false, "confidence": "high/medium/low", "reason": "одно предложение по-русски"}'
         )
-        result = subprocess.run(
-            ["claude", "--print", "--dangerously-skip-permissions",
-             "--model", "claude-haiku-4-5-20251001", "-p", prompt],
-            capture_output=True, text=True, timeout=25,
-            cwd=str(vault_path.parent), check=False,
-        )
-        output = result.stdout.strip()
+        from d_brain.services.runtime import ask_text
+
+        output = ask_text(
+            prompt, timeout=120.0, request_id="maint-improve-verify", wrap=True
+        ).strip()
         if "```" in output:
             output = re.sub(r"```(?:json)?\s*", "", output).strip().rstrip("`").strip()
         data = json.loads(output)
@@ -353,16 +347,13 @@ async def _finalize_improve_session(
         "Только строку, без JSON и markdown."
     )
 
+    from d_brain.services.runtime import ask_text
+
     try:
-        result = await asyncio.to_thread(
-            lambda: subprocess.run(
-                ["claude", "--print", "--dangerously-skip-permissions",
-                 "--model", "claude-haiku-4-5-20251001", "-p", prompt],
-                capture_output=True, text=True, timeout=45,
-                cwd=str(vault_path.parent), check=False,
-            )
+        out = await asyncio.to_thread(
+            ask_text, prompt, timeout=120.0, request_id="maint-improve-pattern", wrap=True
         )
-        pattern = result.stdout.strip()[:150] if result.returncode == 0 else ""
+        pattern = out.strip()[:150]
     except Exception:
         pattern = ""
 

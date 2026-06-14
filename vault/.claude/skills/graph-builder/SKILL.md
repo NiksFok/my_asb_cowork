@@ -2,8 +2,8 @@
 type: note
 description: Analyze and build knowledge graph links in Obsidian vault. Find orphan notes, suggest connections, add backlinks, visualize link structure. Triggers on /graph, "analyze links", "find orphans", "suggest connections".
 last_accessed: 2026-02-25
-relevance: 0.69
-tier: warm
+relevance: 0.1
+tier: archive
 name: graph-builder
 ---
 

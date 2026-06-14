@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import re
-import subprocess
 
 import httpx
 
@@ -174,25 +173,16 @@ def _pikabu_comments(html_text: str, limit: int = 12) -> list[str]:
 
 
 def _run_claude_cli(prompt: str, timeout: int = 60) -> str:
-    """Run claude CLI with haiku model synchronously. Returns output or empty string."""
-    try:
-        result = subprocess.run(
-            ["claude", "--print", "--model", "claude-haiku-4-5-20251001", "-p", prompt],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-        logger.warning("claude CLI returned code %d: %s", result.returncode, result.stderr[:200])
-    except subprocess.TimeoutExpired:
-        logger.warning("claude CLI timed out after %ds", timeout)
-    except FileNotFoundError:
-        logger.warning("claude CLI not found in PATH")
-    except Exception as exc:
-        logger.warning("claude CLI error: %s", exc)
-    return ""
+    """Summarize via the shared persistent session (subscription billing).
+
+    Returns the reply text or "" on failure. Was a headless `claude --print`
+    (haiku) call before the ASB v3.0 billing migration.
+    """
+    from d_brain.services.runtime import ask_text
+
+    return ask_text(
+        prompt, timeout=float(timeout), request_id="maint-web", wrap=True
+    ).strip()
 
 
 async def summarize_content(

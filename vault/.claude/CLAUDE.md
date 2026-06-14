@@ -2,8 +2,8 @@
 type: note
 title: Agent Second Brain
 last_accessed: 2026-03-02
-relevance: 0.76
-tier: warm
+relevance: 0.1
+tier: archive
 ---
 # Agent Second Brain
 

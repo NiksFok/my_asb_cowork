@@ -1,0 +1,10 @@
+[Unit]
+Description=d-brain Midday Health Check
+
+[Service]
+Type=oneshot
+User=niks
+WorkingDirectory=/home/niks/my_asb
+ExecStart=/home/niks/my_asb/scripts/health.sh
+TimeoutStartSec=300
+Environment=PYTHONUNBUFFERED=1

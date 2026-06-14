@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 import re
-import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -31,19 +30,12 @@ async def _generate_summary(text: str, source: str, vault_path: Path) -> dict | 
         f"Верни ТОЛЬКО JSON без markdown: {{\"points\": [\"...\",\"...\",\"...\"], \"idea\": \"...\"}}\n\n"
         f"Текст:\n{text[:1500]}"
     )
+    from d_brain.services.runtime import ask_text
+
     try:
-        result = await asyncio.wait_for(
-            asyncio.to_thread(
-                lambda: subprocess.run(
-                    ["claude", "--print", "--dangerously-skip-permissions",
-                     "--model", "claude-haiku-4-5-20251001", "-p", prompt],
-                    capture_output=True, text=True, timeout=20,
-                    cwd=str(vault_path.parent), check=False,
-                )
-            ),
-            timeout=22,
-        )
-        output = result.stdout.strip()
+        output = (await asyncio.to_thread(
+            ask_text, prompt, timeout=120.0, request_id="maint-forward", wrap=True
+        )).strip()
         if "```" in output:
             output = re.sub(r"```(?:json)?\s*", "", output).strip().rstrip("`").strip()
         data = json.loads(output)

@@ -2,8 +2,8 @@
 type: note
 description: Check alignment between tasks in Todoist and goals in vault. Find orphan tasks and stale goals.
 last_accessed: 2026-02-25
-relevance: 0.69
-tier: warm
+relevance: 0.1
+tier: archive
 name: goal-aligner
 ---
 

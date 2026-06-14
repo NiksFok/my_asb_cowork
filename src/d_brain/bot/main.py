@@ -26,7 +26,7 @@ def create_bot(settings: Settings) -> Bot:
 def create_dispatcher() -> Dispatcher:
     """Create and configure the dispatcher with routers."""
     from d_brain.bot.handlers import (
-        buttons, commands, do, document, done, edit, fix, food, forward, improve, location, news, photo, process, text, video, voice, weekly,
+        buttons, cascade, commands, do, document, done, edit, fix, forward, improve, location, news, photo, process, text, video, voice, weekly,
     )
 
     # Use memory storage for FSM (required for /do command state)
@@ -39,9 +39,9 @@ def create_dispatcher() -> Dispatcher:
     dp.include_router(weekly.router)
     dp.include_router(do.router)    # Before voice/text to catch FSM state
     dp.include_router(done.router)  # /done — finalize reflection
+    dp.include_router(cascade.router)  # /cascade — goal cascade review
     dp.include_router(fix.router)   # /fix — add correction rule
     dp.include_router(edit.router)  # Edit mode — batch corrections
-    dp.include_router(food.router)      # Food session — before photo/voice/text to catch FoodState
     dp.include_router(buttons.router)  # Reply keyboard buttons
     dp.include_router(voice.router)
     dp.include_router(photo.router)
@@ -93,14 +93,38 @@ def create_auth_middleware(settings: Settings) -> MiddlewareType:
 
 async def run_bot(settings: Settings) -> None:
     """Run the bot with polling."""
+    import asyncio
+
     bot = create_bot(settings)
     dp = create_dispatcher()
 
     # Always add auth middleware for security (it handles allow_all_users internally)
     dp.update.middleware(create_auth_middleware(settings))
 
+    # ASB v3.0: warm the persistent interactive Claude session (subscription
+    # billing) so the first user message isn't blocked by a ~90s cold start.
+    # Non-fatal — if it fails, the session lazy-starts on the first ask().
+    try:
+        from d_brain.services.runtime import get_session
+
+        await asyncio.to_thread(get_session(settings).ensure_session)
+        logger.info("Persistent Claude session warmed up")
+    except Exception:
+        logger.exception("session warmup failed; will lazy-start on first ask")
+
+    # Cron ticker (scheduled jobs / reminders) — runs in the second, isolated
+    # brain session so it never blocks the live chat. Off if cron_enabled=False.
+    cron_task = None
+    if settings.cron_enabled:
+        from d_brain.services.cron_runner import run_cron
+
+        cron_task = asyncio.create_task(run_cron(settings, bot))
+        logger.info("Cron ticker started")
+
     logger.info("Starting bot polling...")
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        if cron_task is not None:
+            cron_task.cancel()
         await bot.session.close()

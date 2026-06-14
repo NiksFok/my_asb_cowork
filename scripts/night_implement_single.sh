@@ -41,29 +41,34 @@ print(m.group(0) if m else '')
 
 cd "$PROJECT_DIR"
 
-RESULT=$(claude --print --dangerously-skip-permissions \
-    --model claude-sonnet-4-6 \
-    -p "Отвечай исключительно на русском языке.
+# ASB v3.0: self-coding turn runs on the persistent interactive session
+# (subscription), not headless `claude -p`. The session's cwd is the vault, so
+# the prompt uses ABSOLUTE project paths. wrap=True gives a clean reply (the
+# echoed prompt — which itself contains "DONE:"/"FAILED:" lines — is excluded).
+ABS_ITEM_FILE=""
+[ -n "$ITEM_FILE" ] && ABS_ITEM_FILE="$PROJECT_DIR/$ITEM_FILE"
+RESULT=$(printf '%s' "Отвечай исключительно на русском языке.
 
 Implement this improvement to the d-brain Telegram bot project.
+Project root (edit files here, use ABSOLUTE paths): $PROJECT_DIR
 
 Concept document: $FULL_CONCEPT_PATH
 
 Title: $TITLE
-Target file (if identified): $ITEM_FILE
+Target file (if identified): $ABS_ITEM_FILE
 Implementation steps: $SPEC
 
 RULES:
 - Read the full concept document first for complete context
 - Read the target file before making changes
 - Make ONLY the specific change described
-- Verify Python syntax after editing
+- Verify Python syntax after editing (cd $PROJECT_DIR first)
 - If spec is too vague or change would break functionality → FAILED
 
 Return EXACTLY ONE of:
 DONE: одно предложение на русском, описывающее что изменено
 FAILED: одно предложение на русском, объясняющее причину (конкретно)" \
-    </dev/null 2>/dev/null) || RESULT="FAILED: ошибка выполнения claude"
+    | uv run python -m d_brain.pipeline ask 2>/dev/null) || RESULT="FAILED: ошибка выполнения сессии"
 
 RESULT_LINE=$(echo "$RESULT" | grep -E '^(DONE|FAILED):' | head -1)
 if [ -z "$RESULT_LINE" ]; then

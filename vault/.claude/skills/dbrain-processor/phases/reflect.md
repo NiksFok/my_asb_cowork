@@ -2,8 +2,8 @@
 type: note
 title: Phase 3: REFLECT
 last_accessed: 2026-03-02
-relevance: 0.76
-tier: warm
+relevance: 0.1
+tier: archive
 ---
 # Phase 3: REFLECT
 
@@ -24,7 +24,7 @@ Use the template from SKILL.md. Include:
 
 - ONE Big Thing (from capture.json)
 - Thoughts saved (from execute.json)
-- Tasks created (with IDs)
+- Tasks created (WITHOUT task IDs — only task name, priority, due date)
 - Process goals status
 - Workload by day
 - Vault Health score (from latest health-history.json entry, if exists)
@@ -95,6 +95,21 @@ Orphans: {N} | Broken: {M} | Avg links: {X}
 
 ### 6. Update agent_notes.md
 
+
+**ФИЛЬТР ПЕРЕД ЗАПИСЬЮ:**
+Перед тем как записать сигнал — задай себе вопрос: «Это улучшение касается D-Brain (этот бот)?»
+
+Записывай только если сигнал напрямую о:
+- поведении, командах или UX этого Telegram-бота (d-brain)
+- скриптах обработки (process.sh, morning.sh и др.)
+- vault, памяти, графе заметок этого бота
+
+НЕ записывай если речь идёт о:
+- нутрициологе, d-doctor, питании или здоровье
+- другом боте или другом сервисе
+- общих AI-технологиях без прямой привязки к D-Brain
+- идеях для других проектов пользователя
+
 Scan all input for signals to improve the agent. Write to `vault/agent/agent_notes.md`.
 
 Create the file with header if it doesn't exist:
@@ -121,6 +136,35 @@ Rules:
 - Only add entries if there's real signal (don't add empty sections)
 - NNN = 3-digit sequence within same date (001, 002, ...)
 - If agent_notes.md doesn't have today's date section yet — create it
+
+### 7. Проверки эскалации задач
+
+Перед финальным отчётом выполни три проверки по данным из execute.json:
+
+**Проверка 1: Перегрузка дня**
+При каждой задаче, назначенной на конкретный день — считай суммарное количество задач на этот день (включая уже существующие в Todoist).
+Если задач >5 на один день — добавь в отчёт предупреждение:
+```
+⚠️ Перегрузка {ДАТА}: {N} задач. Рекомендуется перенести p4-задачи на другой день.
+```
+
+**Проверка 2: Просроченный process-goal**
+Если любой process-goal просрочен более чем на 7 дней — выводи его ПЕРВЫМ пунктом в блоке "Top 3 приоритетов" с меткой КРИТИЧНО:
+```
+🔴 КРИТИЧНО: «{название goal}» — просрочен на {N} дней
+```
+
+**Проверка 3: Переносы P1-задачи**
+Если P1-задача переносилась 2 или более раз (признак: due_date менялся в истории или задача уже просрочена повторно) — добавь блок предупреждения:
+```
+🚨 Задача «{название}» переносилась {N} раз. Начни прямо сейчас — выдели 25 минут.
+```
+
+### HTML report formatting rules (MANDATORY for Telegram)
+
+- **Tasks**: show ONLY task name + priority + due date. NEVER include Todoist task ID.
+- **Thoughts**: for each saved thought, read the file's first heading (# Title) to get the display name. Show title in RUSSIAN (translate if in English). Format: `• {emoji} {Russian title} → {category}/`. NEVER use [[wikilink]] syntax in the Telegram report.
+- **New links**: use plain note names without [[ ]] brackets. Example: `Note A ↔ Note B`
 
 ## CRITICAL
 

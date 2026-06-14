@@ -2,8 +2,8 @@
 type: note
 description: Personal assistant for processing daily voice/text entries from Telegram. Classifies content, creates Todoist tasks aligned with goals, saves thoughts to Obsidian with wiki-links, generates HTML reports. 3-phase pipeline (CAPTURE/EXECUTE/REFLECT). Triggers on /process command or daily 23:00 cron.
 last_accessed: 2026-03-02
-relevance: 0.76
-tier: warm
+relevance: 0.1
+tier: archive
 name: second-brain-processor
 depends_on: [graph-builder, todoist-ai, agent-memory, vault-health]
 ---
@@ -258,7 +258,7 @@ Output RAW HTML (no markdown, no code blocks):
 {ONE_BIG_THING}
 
 <b>📓 Сохранено мыслей:</b> {N}
-• {emoji} {title} → {category}/
+• {emoji} {Название на русском} → {category}/
 
 <b>✅ Создано задач:</b> {M}
 • {task} <i>({priority}, {due})</i>
@@ -275,7 +275,7 @@ Output RAW HTML (no markdown, no code blocks):
 • {overdue or stale goals}
 
 <b>🔗 Новые связи:</b>
-• [[Note A]] ↔ [[Note B]]
+• Note A ↔ Note B
 
 <b>⚡ Топ-3 приоритета:</b>
 1. {task}

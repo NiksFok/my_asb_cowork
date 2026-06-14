@@ -68,9 +68,24 @@ fi
 log "Starting PLAN phase..."
 cd "$VAULT_DIR"
 
-claude --print --dangerously-skip-permissions \
-    --model claude-sonnet-4-6 \
-    -p "Today is $TODAY. You are the night automation agent for d-brain Telegram bot.
+# ASB v3.0: runs on the persistent interactive session (subscription), not
+# headless `claude -p`. Session cwd is the vault → the prompt uses ABSOLUTE
+# project paths so files land in the right place.
+printf '%s' "Today is $TODAY. You are the night automation agent for d-brain Telegram bot.
+
+PROJECT FILE STRUCTURE (all paths relative to $PROJECT_DIR):
+- src/d_brain/ — Python bot source code
+- scripts/ — automation shell scripts
+- vault/.claude/skills/dbrain-processor/phases/execute.md — EXECUTE phase skill
+- vault/.claude/skills/dbrain-processor/phases/capture.md — CAPTURE phase skill
+- vault/.claude/skills/dbrain-processor/phases/reflect.md — REFLECT phase skill
+- vault/.claude/skills/dbrain-processor/references/todoist.md — Todoist rules
+- vault/.claude/skills/dbrain-processor/references/rules.md — general rules
+- vault/.claude/skills/morning-briefer/SKILL.md — morning briefer skill
+- vault/.claude/skills/agent-memory/SKILL.md — agent memory skill
+- vault/agent/ — agent notes, plans, concepts
+
+IMPORTANT: All \"file\" fields in the plan JSON MUST be paths relative to $PROJECT_DIR (e.g. \"vault/.claude/skills/dbrain-processor/phases/execute.md\"), NOT relative to vault.
 
 Read in this order:
 1. MEMORY.md — user preferences, accepted/rejected improvement patterns
@@ -96,7 +111,7 @@ c) Complex (>2h, ML/infra, architectural redesign) → 'concept'
 
 PRIORITY: errors/bugs first → items aligned with weekly goals → small effort → ideas
 
-Write the plan to vault/agent/impl-plan-$TODAY.json with EXACT JSON format:
+Write the plan to $PLAN_FILE (absolute path) with EXACT JSON format:
 {
   \"date\": \"$TODAY\",
   \"items\": [
@@ -131,7 +146,7 @@ For concept type: file must be null. ALSO set:
   Bad: \"Requires vector database integration\"
 
 Return ONLY: PLAN_WRITTEN: N items (X merged, Y simple, Z concepts)" \
-    </dev/null >> "$LOG_FILE" 2>&1 || log "WARN: plan phase had errors"
+    | uv run python -m d_brain.pipeline ask >> "$LOG_FILE" 2>&1 || log "WARN: plan phase had errors"
 
 # Verify plan file was created
 if [ ! -f "$PLAN_FILE" ]; then
@@ -222,14 +237,12 @@ print(t)
         CONCEPT_FILE="vault/agent/concepts/${TODAY}-${SLUG}.md"
         AUTO_LABEL=$([ "$ITEM_AUTO" = "true" ] && echo "Да" || echo "Нет")
 
-        CONCEPT_RESULT=$(claude --print --dangerously-skip-permissions \
-            --model claude-sonnet-4-6 \
-            -p "Подготовь документ концепта для сложной идеи улучшения d-brain бота.
+        CONCEPT_RESULT=$(printf '%s' "Подготовь документ концепта для сложной идеи улучшения d-brain бота.
 
 Название: $ITEM_TITLE
 Описание: $ITEM_SPEC
 
-Напиши в файл $CONCEPT_FILE следующий Markdown:
+Напиши в файл $PROJECT_DIR/$CONCEPT_FILE следующий Markdown:
 
 # $ITEM_TITLE
 
@@ -254,7 +267,7 @@ print(t)
 **Если нет — почему:** $ITEM_REASON
 
 Верни СТРОГО одну строку: CONCEPT_DOC: $CONCEPT_FILE" \
-            </dev/null 2>>"$LOG_FILE") || CONCEPT_RESULT="FAILED: claude error"
+            | uv run python -m d_brain.pipeline ask 2>>"$LOG_FILE") || CONCEPT_RESULT="FAILED: session error"
 
         if echo "$CONCEPT_RESULT" | grep -q "^CONCEPT_DOC:"; then
             DOC_PATH=$(echo "$CONCEPT_RESULT" | grep "^CONCEPT_DOC:" | head -1 | sed 's/^CONCEPT_DOC: //')
@@ -304,25 +317,24 @@ pathlib.Path(path).write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
     else
         # ── simple / merged: implement the change ─────────────────────────
-        IMPL_RESULT=$(claude --print --dangerously-skip-permissions \
-            --model claude-sonnet-4-6 \
-            -p "Implement this improvement to the d-brain Telegram bot project.
+        IMPL_RESULT=$(printf '%s' "Implement this improvement to the d-brain Telegram bot project.
+Project root (edit files here, use ABSOLUTE paths): $PROJECT_DIR
 
 Title: $ITEM_TITLE
-Target file: $ITEM_FILE
+Target file: $PROJECT_DIR/$ITEM_FILE
 Specification: $ITEM_SPEC
 Related agent_notes IDs: $ITEM_IDS
 
 RULES:
 - Read the target file first to understand the full context
 - Make ONLY the specific change described — no refactoring, no style changes
-- After editing: verify Python syntax with: python3 -c 'import ast; ast.parse(open(\"$ITEM_FILE\").read())'
+- After editing: verify Python syntax with: python3 -c 'import ast; ast.parse(open(\"$PROJECT_DIR/$ITEM_FILE\").read())'
 - If file not found, spec is too vague, or change would clearly break functionality → SKIP
 
 Return EXACTLY ONE of:
 DONE: одно предложение на русском, описывающее что изменено
 SKIP: одно предложение на русском, объясняющее причину (конкретно)" \
-            </dev/null 2>>"$LOG_FILE") || IMPL_RESULT="SKIP: claude execution error"
+            | uv run python -m d_brain.pipeline ask 2>>"$LOG_FILE") || IMPL_RESULT="SKIP: session execution error"
 
         RESULT_LINE=$(echo "$IMPL_RESULT" | grep -E '^(DONE|SKIP):' | head -1)
         if [ -z "$RESULT_LINE" ]; then

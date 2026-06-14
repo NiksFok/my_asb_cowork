@@ -33,22 +33,30 @@ DEFAULT_TIMEOUT = 1200  # 20 minutes
 
 
 def finalize_reflection(settings, week: str, reflection_path: Path, summary_path: Path) -> str:
-    """Call Claude to process reflection and append to summary.
+    """Process the weekly reflection through the persistent session and append
+    it to the summary.
+
+    ASB v3.0: runs on the shared interactive session (subscription billing),
+    not headless `claude --print`. Paths are passed ABSOLUTE because the session
+    cwd is the vault, not the project root.
 
     Returns:
         Output string to send to user.
     """
-    mcp_config = settings.vault_path.parent / "mcp-config.json"
+    from d_brain.services.runtime import get_session
+
+    refl_abs = reflection_path.resolve()
+    summ_abs = summary_path.resolve()
 
     prompt = f"""Сегодня я завершаю недельную рефлексию за {week}.
 
 ФАЙЛЫ:
-- Сырые ответы рефлексии: {reflection_path}
-- Недельный дайджест: {summary_path}
+- Сырые ответы рефлексии: {refl_abs}
+- Недельный дайджест: {summ_abs}
 
 ЗАДАЧА:
-1. Прочитай файл рефлексии {reflection_path}
-2. Прочитай недельный дайджест {summary_path}
+1. Прочитай файл рефлексии {refl_abs}
+2. Прочитай недельный дайджест {summ_abs}
 3. Структурируй ответы пользователя по 6 вопросам рефлексии:
    1. Что запомнилось сильнее всего?
    2. Самый успешный день?
@@ -58,7 +66,7 @@ def finalize_reflection(settings, week: str, reflection_path: Path, summary_path
    6. Какого опыта хотелось бы избежать?
 4. Сформулируй 2-3 конкретные рекомендации для следующей недели
    на основе рефлексии и целей из vault/goals/3-weekly.md
-5. ДОЗАПИШИ в конец файла {summary_path} следующий раздел в Markdown формате:
+5. ДОЗАПИШИ в конец файла {summ_abs} следующий раздел в Markdown формате:
 
 ## 🪞 Рефлексия недели
 
@@ -73,37 +81,22 @@ CRITICAL OUTPUT FORMAT:
 - Кратко перечисли ключевые инсайты (3-5 пунктов)
 - Allowed tags: <b>, <i>, <code>, <s>, <u>"""
 
-    env = os.environ.copy()
-    if settings.todoist_api_key:
-        env["TODOIST_API_KEY"] = settings.todoist_api_key
-
-    result = subprocess.run(
-        [
-            "claude",
-            "--print",
-            "--model", "claude-sonnet-4-6",
-            "--dangerously-skip-permissions",
-            "--mcp-config",
-            str(mcp_config),
-            "-p",
-            prompt,
-        ],
-        cwd=str(settings.vault_path.parent),
-        capture_output=True,
-        text=True,
-        timeout=DEFAULT_TIMEOUT,
-        check=False,
-        env=env,
+    res = get_session(settings).ask(
+        prompt, timeout=DEFAULT_TIMEOUT, request_id="maint-reflect-finalize", wrap=True
     )
-
-    if result.returncode != 0:
-        err = result.stderr or "Claude processing failed"
-        logger.error("Claude failed: %s", err)
-        return f"❌ Ошибка обработки рефлексии: {err[:300]}"
+    if res.status == "logged_out":
+        logger.error("session logged out")
+        return "❌ Рефлексия: Claude разлогинился — нужен вход (/login)"
+    if res.status == "rate_limited":
+        logger.error("subscription rate limited")
+        return "❌ Рефлексия: лимит подписки исчерпан, попробуй позже"
+    if not res.ok:
+        logger.error("session ask failed: %s %s", res.status, res.detail)
+        return f"❌ Ошибка обработки рефлексии: {(res.detail or res.status)[:300]}"
 
     # Clean output using the same logic as processor.py
     import re
-    output = result.stdout.strip()
+    output = (res.reply or "").strip()
     if "\n---\n" in output or output.startswith("---\n"):
         lines = output.split("\n")
         seps = [i for i, ln in enumerate(lines) if ln.strip() == "---"]
@@ -156,6 +149,16 @@ async def main() -> None:
     logger.info("Finalizing reflection for week %s", week)
     output = finalize_reflection(settings, week, reflection_path, summary_path)
 
+    # Never send an empty message — Telegram rejects it (this was the recurring
+    # d-brain-reflect.service failure). Fall back to a minimal card.
+    if not output or len(output.strip()) < 20:
+        logger.warning("empty reflection output — sending fallback card")
+        output = (
+            f"🪞 <b>Рефлексия недели {week}</b>\n"
+            f"Обработка завершена, но текст отчёта пуст. "
+            f"Загляни в {summary_path.name}."
+        )
+
     # Clear flag file
     reflection.clear(week)
     logger.info("Reflection flag cleared.")
@@ -188,6 +191,24 @@ async def main() -> None:
         print(output)
     finally:
         await bot.session.close()
+
+    # --- trigger cascade goal review ---
+    try:
+        cascade_script = Path(__file__).parent / "cascade_review.py"
+        logger.info("Launching cascade review for week %s", week)
+        proc = await asyncio.to_thread(
+            subprocess.run,
+            [sys.executable, str(cascade_script), week],
+            cwd=str(settings.vault_path.parent),
+            capture_output=True,
+            text=True,
+            timeout=1800,
+            check=False,
+        )
+        if proc.returncode != 0:
+            logger.warning("Cascade review exited with %s: %s", proc.returncode, proc.stderr[:300])
+    except Exception:
+        logger.exception("Cascade review trigger failed")
 
 
 if __name__ == "__main__":
