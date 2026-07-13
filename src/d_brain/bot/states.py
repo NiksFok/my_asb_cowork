@@ -28,3 +28,9 @@ class SettingsState(StatesGroup):
     """States for Settings menu flows."""
 
     waiting_for_city = State()  # Waiting for user to type a new city name
+
+
+class StudyState(StatesGroup):
+    """States for the study (tutor) dialogue."""
+
+    in_lesson = State()  # Active lesson; messages go to the study session

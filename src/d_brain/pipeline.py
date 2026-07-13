@@ -145,9 +145,10 @@ def _morning_prompt(vault: Path, today: str) -> str:
         f"=== INSTRUCTIONS ===\n"
         f"1. Read MEMORY.md, goals/3-weekly.md, goals/2-monthly.md\n"
         f"2. Read daily logs for last 2 days\n"
-        f"3. Call mcp__todoist__find-tasks-by-date for today\n"
-        f"4. Call mcp__todoist__find-tasks to get overdue tasks\n"
-        f"5. Generate HTML briefing using morning-briefer skill template\n\n"
+        f"3. If study/plan.md exists, read it (next planned topic) and the tail of study/progress.md\n"
+        f"4. Call mcp__todoist__find-tasks-by-date for today\n"
+        f"5. Call mcp__todoist__find-tasks to get overdue tasks\n"
+        f"6. Generate HTML briefing using morning-briefer skill template\n\n"
         f"CRITICAL: Return RAW HTML only. No markdown. No explanations."
     )
 

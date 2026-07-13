@@ -82,6 +82,10 @@ class Settings(BaseSettings):
         default="claude-opus-4-8",
         description="Model for the persistent session (empty = Claude Code default)",
     )
+    study_model: str = Field(
+        default="claude-sonnet-5",
+        description="Model for the study (tutor) session — cheaper than the brain's Opus",
+    )
     tz: str = Field(default="Europe/Moscow", description="Timezone for timers/reports")
 
     # ── cron (scheduled jobs in the second, isolated brain session) ──────
@@ -114,6 +118,11 @@ class Settings(BaseSettings):
         `python -m d_brain.cron` edits and the in-bot ticker share one file.
         """
         return self.runtime_dir / "cron"
+
+    @property
+    def study_dir(self) -> Path:
+        """Study (tutor) session state dir: its own pane.lock / pane.log / ready."""
+        return self.runtime_dir / "study"
 
     @property
     def admin_chat_id(self) -> Optional[int]:
