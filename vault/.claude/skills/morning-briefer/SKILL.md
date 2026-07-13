@@ -25,12 +25,21 @@ NEVER use: `**`, `##`, ` ``` `, `- **`, or any markdown.
 - `=AI_NEWS=` — raw headlines from HuggingFace, OpenAI, TechCrunch, VentureBeat
 - `=TODAY=` — date and weekday
 - Vault files: MEMORY.md, goals/3-weekly.md, goals/2-monthly.md, daily/*.md
+- Study (optional): study/plan.md + tail of study/progress.md — see «Study line» below
 
 ## MCP Tools Required
 
 - `mcp__todoist__find-tasks` — get all active tasks
 - `mcp__todoist__find-tasks-by-date` — get tasks due today
 - `mcp__todoist__get-task` — get task details (for description with responsible person)
+
+## Study line (optional)
+
+If `study/plan.md` exists, add exactly ONE line to the briefing:
+`🎓 Сегодня по плану: тема N — «…»` (take it from the `**Следующее занятие:**`
+marker in plan.md). If the last progress.md entry suggests a review, use
+`🎓 Повторить: …` instead. No details, no second line. If there is no
+study/plan.md — omit the study line entirely.
 
 ## News Curation Rules
 
