@@ -34,6 +34,7 @@ def create_dispatcher() -> Dispatcher:
 
     # Register routers - ORDER MATTERS
     dp.include_router(commands.router)
+    dp.include_router(buttons.exit_router)  # Global 🛑 exit — must beat stateful handlers
     dp.include_router(location.router)
     dp.include_router(process.router)
     dp.include_router(weekly.router)

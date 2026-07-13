@@ -4,7 +4,37 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
+from d_brain.bot.keyboards import get_main_keyboard
+
 router = Router(name="buttons")
+
+# Every 🛑 stop label from every mode (study / do-conversation / agent session),
+# plus /stop. Handled by a single state-INDEPENDENT router registered BEFORE the
+# stateful handlers, so a 🛑 press always exits — even when the FSM state was
+# wiped by a bot restart (MemoryStorage) or when a stop label from one mode is
+# pressed while another mode's handler is active. Without this, e.g. "🛑
+# Завершить учёбу" pressed inside a /do conversation is not in that handler's
+# exit set and gets executed as a Claude prompt instead of ending the mode.
+_ALL_EXIT_TRIGGERS = {
+    "🛑 Завершить",
+    "🛑 Завершить учёбу",
+    "🛑 Завершить сессию",
+    "/stop",
+}
+
+exit_router = Router(name="exit")
+
+
+@exit_router.message(F.text.in_(_ALL_EXIT_TRIGGERS))
+async def btn_exit_any(message: Message, state: FSMContext) -> None:
+    """Exit any mode and return to the main menu, regardless of FSM state."""
+    label = (message.text or "").strip()
+    await state.clear()
+    if label == "🛑 Завершить учёбу":
+        text = "✅ Учёба завершена. Конспект и прогресс — в vault (study/)."
+    else:
+        text = "✅ Завершено. Возврат в главное меню."
+    await message.answer(text, reply_markup=get_main_keyboard())
 
 
 @router.message(F.text == "📅 Неделя")
