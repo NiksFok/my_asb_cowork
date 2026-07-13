@@ -23,6 +23,14 @@ async def btn_do(message: Message, state: FSMContext) -> None:
     await open_session(message, state)
 
 
+@router.message(F.text == "🎓 Учёба")
+async def btn_study(message: Message, state: FSMContext) -> None:
+    """Handle Study button - enter the tutor dialogue."""
+    from d_brain.bot.handlers.study import enter_study
+
+    await enter_study(message, state)
+
+
 @router.message(F.text == "✏️ Правки")
 async def btn_edit(message: Message, state: FSMContext) -> None:
     """Handle Edit button - enter edit mode."""

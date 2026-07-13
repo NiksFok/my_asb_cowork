@@ -26,7 +26,7 @@ def create_bot(settings: Settings) -> Bot:
 def create_dispatcher() -> Dispatcher:
     """Create and configure the dispatcher with routers."""
     from d_brain.bot.handlers import (
-        buttons, cascade, commands, do, document, done, edit, fix, forward, improve, location, news, photo, process, text, video, voice, weekly,
+        buttons, cascade, commands, do, document, done, edit, fix, forward, improve, location, news, photo, process, study, text, video, voice, weekly,
     )
 
     # Use memory storage for FSM (required for /do command state)
@@ -38,6 +38,7 @@ def create_dispatcher() -> Dispatcher:
     dp.include_router(process.router)
     dp.include_router(weekly.router)
     dp.include_router(do.router)    # Before voice/text to catch FSM state
+    dp.include_router(study.router)  # Study mode — tutor on the isolated Sonnet session
     dp.include_router(done.router)  # /done — finalize reflection
     dp.include_router(cascade.router)  # /cascade — goal cascade review
     dp.include_router(fix.router)   # /fix — add correction rule

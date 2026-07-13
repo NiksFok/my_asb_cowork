@@ -26,6 +26,7 @@ def get_main_keyboard(settings: Settings | None = None) -> ReplyKeyboardMarkup:
 
     # Row 2: Правки + optional onboarding/improve buttons
     row2 = []
+    row2.append("🎓 Учёба")
     row2.append("✏️ Правки")
     if settings.first_seen:
         try:
@@ -57,6 +58,14 @@ def get_conversation_keyboard() -> ReplyKeyboardMarkup:
     """Keyboard shown while a /do conversation is open (follow-ups continue it)."""
     builder = ReplyKeyboardBuilder()
     builder.button(text="🛑 Завершить")
+    builder.adjust(1)
+    return builder.as_markup(resize_keyboard=True, is_persistent=True)
+
+
+def get_study_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard shown during a study (tutor) dialogue."""
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="🛑 Завершить учёбу")
     builder.adjust(1)
     return builder.as_markup(resize_keyboard=True, is_persistent=True)
 

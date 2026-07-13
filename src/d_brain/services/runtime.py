@@ -27,15 +27,17 @@ logger = logging.getLogger(__name__)
 
 _session: ClaudeSession | None = None
 _cron_session: ClaudeSession | None = None
+_study_session: ClaudeSession | None = None
 _processor = None  # type: ignore[var-annotated]
 _ask_lock = asyncio.Lock()
 
 
 def reset() -> None:
     """Drop the singletons (tests only)."""
-    global _session, _cron_session, _processor
+    global _session, _cron_session, _study_session, _processor
     _session = None
     _cron_session = None
+    _study_session = None
     _processor = None
 
 
@@ -116,6 +118,39 @@ def get_cron_session(settings: Settings) -> ClaudeSession:
             runtime_dir=settings.cron_dir,
         )
     return _cron_session
+
+
+def get_study_session(settings: Settings) -> ClaudeSession:
+    """Return the study tutor — a third, isolated ClaudeSession.
+
+    Same vault as the brain (lesson progress lives in vault study/ files), but
+    its own tmux session, runtime dir, persona (deploy/study-system.md) and a
+    cheaper model, so long lessons never touch the second brain's context or
+    the Opus quota. Started lazily on first use — the watchdog does not keep
+    it warm.
+    """
+    global _study_session
+    if _study_session is None:
+        vault = settings.vault_path.resolve()
+        persona = vault.parent / "deploy" / "study-system.md"
+        if (
+            not persona.exists()
+            or "# d-study session contract" not in persona.read_text()
+        ):
+            raise RuntimeError(
+                f"study persona missing or invalid: {persona} — "
+                "refusing to start a personality-less tutor"
+            )
+        _study_session = ClaudeSession(
+            session_name=f"{_persisted_name(settings)}_study",
+            work_dir=vault,
+            runtime_dir=settings.study_dir,
+            mcp_config=None,
+            system_prompt_file=persona,
+            model=settings.study_model or None,
+            env_prefix=None,
+        )
+    return _study_session
 
 
 def get_processor(settings: Settings):
