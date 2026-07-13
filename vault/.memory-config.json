@@ -25,7 +25,8 @@
     "thoughts/reflections/": "reflection",
     "thoughts/learnings/": "learning",
     "thoughts/projects/": "project",
-    "goals/": "goal"
+    "goals/": "goal",
+    "study/": "learning"
   },
   "use_git_dates": true
 }
