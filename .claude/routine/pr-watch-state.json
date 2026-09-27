@@ -1,0 +1,15 @@
+{
+  "_comment": "State for the daily 'external merge requests' routine. Prevents re-notifying about unchanged PRs. Each entry keyed by PR number.",
+  "last_checked": "2026-09-27",
+  "notified": {
+    "1": {
+      "title": "Учебный режим: личный репетитор в отдельной сессии",
+      "author": "Deniz-h-art",
+      "head_sha": "35403c5f240c14545bd8b77c6e450310d80b194f",
+      "updated_at": "2026-07-13T20:37:57Z",
+      "notified_on": "2026-09-27",
+      "decision": "pending-owner",
+      "note": "Reviewed, mergeable, awaiting owner accept/reject. Re-notify only if head_sha or updated_at changes, or owner decides."
+    }
+  }
+}
