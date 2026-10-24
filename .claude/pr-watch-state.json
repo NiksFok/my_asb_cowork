@@ -1,0 +1,64 @@
+{
+  "_comment": "Канонический файл состояния ежедневной рутины «внешние merge-реквесты» в NiksFok/my_asb_cowork. Каждый запуск рутины — новая эфемерная сессия без памяти, поэтому состояние живёт здесь, в репозитории.",
+  "_discovery": [
+    "ПОРЯДОК РАБОТЫ для будущих запусков рутины:",
+    "1. git fetch origin --prune",
+    "2. Найти ЭТОТ файл по всем ветках, а не только в своей:",
+    "   for b in $(git branch -r | tr -d ' '); do git ls-tree -r --name-only $b | grep -q '.claude/pr-watch-state.json' && echo $b; done",
+    "3. Прочитать самую свежую версию (max last_checked) и продолжить её, а НЕ создавать новый файл под новым именем.",
+    "4. Уведомлять владельца только если: появился новый PR/issue, у отслеженного PR изменился head_sha или updated_at, появилось ревью/комментарий, или владелец принял решение.",
+    "5. Если ничего не изменилось — молча обновить last_checked и checks[] и завершиться без уведомления."
+  ],
+  "repo": "NiksFok/my_asb_cowork",
+  "canonical_path": ".claude/pr-watch-state.json",
+  "canonical_branch": "claude/jolly-fermat-b4vbng",
+  "last_checked": "2026-10-24",
+  "superseded_state_files": [
+    { "branch": "claude/jolly-fermat-3xwoh8", "path": ".claude/external-pr-watch.md", "checked": "2026-09-26" },
+    { "branch": "claude/jolly-fermat-7st7dh", "path": ".claude/routine/pr-watch-state.json", "checked": "2026-09-27" },
+    { "branch": "claude/jolly-fermat-7luzth", "path": "docs/pr-watch-log.md", "checked": "2026-10-09" },
+    { "branch": "claude/jolly-fermat-edsgbl", "path": ".claude/pr-watch-state.json", "checked": "2026-10-12" },
+    { "branch": "claude/jolly-fermat-sx0qer", "path": ".claude/external-pr-watch.json", "checked": "2026-10-21" }
+  ],
+  "tracked": {
+    "pull/1": {
+      "url": "https://github.com/NiksFok/my_asb_cowork/pull/1",
+      "title": "🎓 Учебный режим: личный репетитор в отдельной сессии",
+      "author": "Deniz-h-art",
+      "author_kind": "сторонний разработчик (форк Deniz-h-art/my_asb_cowork-1)",
+      "head_ref": "feat/study-mode",
+      "head_sha": "35403c5f240c14545bd8b77c6e450310d80b194f",
+      "base_sha_at_review": "498ad8d785563d6a54c27d0bab8a681411a5f4f4",
+      "created_at": "2026-07-13T20:33:46Z",
+      "updated_at": "2026-07-13T20:37:57Z",
+      "size": "+471 / -8, 16 файлов, 5 коммитов",
+      "state": "open",
+      "mergeable_state": "clean",
+      "reviews": "нет",
+      "comments": "нет",
+      "decision": "pending-owner",
+      "owner_notified_on": ["2026-09-26", "2026-09-27", "2026-10-09", "2026-10-12", "2026-10-21"],
+      "notify_again_when": "изменится head_sha (сейчас 35403c5) или updated_at (сейчас 2026-07-13T20:37:57Z), появится ревью/комментарий, либо владелец примет решение",
+      "review_findings": {
+        "verdict": "Блокирующих проблем нет; вливать можно. Замечания ниже — для доработки при решении «мержить».",
+        "ok": [
+          "Накладывается на main без конфликтов; изменённые файлы компилируются (python3 -m compileall).",
+          "get_study_session следует конвенциям существующего _build_session: boot-assertion на персону, свой runtime_dir, своя tmux-сессия, своя модель.",
+          "Все используемые kwargs есть в ClaudeSession.__init__; handlers/do.py:_extract_prompt существует; патч keyboards.py ложится на текущий row2.",
+          "Новый глобальный buttons.exit_router не конфликтует с режимом правок (там метки «✅ Готово» / «❌ Отмена»)."
+        ],
+        "to_fix_if_merging": [
+          "STUDY_MODEL по умолчанию claude-sonnet-5 (.env.example, config.py) — проверить валидность ID модели, иначе учебная сессия не поднимется.",
+          "У учебной сессии нет аналога _ask_lock из services/runtime.py: два быстрых сообщения подряд могут наложиться в одной tmux-панели.",
+          "Персона считается как vault_path.parent/deploy/study-system.md — упадёт с RuntimeError, если VAULT_PATH вынесен за пределы проекта.",
+          "Косметика: собственный _EXIT_TRIGGERS в handlers/study.py недостижим после появления глобального exit_router.",
+          "Изменение существующего поведения: выход из /do-диалога отвечает «✅ Завершено. Возврат в главное меню.» вместо «✅ Диалог завершён.».",
+          "Тестов нет (в репозитории нет ни CI, ни каталога tests) — новый хендлер без покрытия."
+        ]
+      }
+    }
+  },
+  "checks": [
+    { "date": "2026-10-24", "open_prs": 1, "open_issues": 0, "new_or_changed": false, "notification_sent": false, "note": "PR #1 без изменений с 2026-07-13; новых PR и issues нет. Уведомление не отправлено — владельцу уже писали 5 раз об этом же неизменившемся PR, решение всё ещё за ним." }
+  ]
+}
